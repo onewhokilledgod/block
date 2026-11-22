@@ -1,3 +1,4 @@
+import { CosmeticDomObserver } from "./cosmetic-dom-observer.js";
 import { CosmeticSelectorProcessor } from "../cosmetic/cosmetic-selector-processor.js";
 import { getBrowserRuntimeApi } from "../shared/browser-content-api.js";
 import {
@@ -9,6 +10,7 @@ import {
 
 type ContentScriptGlobal = typeof globalThis & {
 	__blockCosmeticContentScriptStarted?: boolean;
+	__blockCosmeticDomObserver?: CosmeticDomObserver;
 };
 
 async function applyCosmeticFiltering(): Promise<void> {
@@ -56,6 +58,18 @@ async function applyCosmeticFiltering(): Promise<void> {
 				? applyResponse.error
 				: "Invalid background response."
 		);
+		return;
+	}
+
+	// A document-level user stylesheet automatically covers ordinary DOM
+	// nodes inserted later. MutationObserver is needed here only for open
+	// Shadow DOM, which has a separate CSS scope.
+	try {
+		const observer = new CosmeticDomObserver();
+		observer.start(result.cssText);
+		contentScriptGlobal.__blockCosmeticDomObserver = observer;
+	} catch (error: unknown) {
+		console.warn("[Block] Could not enable dynamic Shadow DOM filtering.", error);
 	}
 
 	if (result.diagnostics.length > 0) {
