@@ -7,7 +7,14 @@
 		"build:wasm": "wasm-pack build crates/wasm-bridge --target web --out-dir ../../extension/src/shared/wasm --out-name filter_engine",
 		"test:rust": "cargo test --workspace",
 		"fmt:rust": "cargo fmt --all -- --check",
-		"lint:rust": "cargo clippy --workspace --all-targets -- -D warnings"
+		"lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
+		"check:extension": "tsc --project extension/tsconfig.json --noEmit",
+		"build:extension": "npm run check:extension && vite build --config extension/vite.config.mts",
+		"build": "npm run build:wasm && npm run build:extension"
 	},
-	"devDependencies": {}
+	"devDependencies": {
+		"@types/node": "^26.6.6",
+		"typescript": "^7.0.2",
+		"vite": "^8.3.8"
+	}
 }
