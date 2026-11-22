@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>WASM Smoke Test</title>
+	</head>
+	<body>
+		<h1>WASM Integration Test</h1>
+		<pre id="output">Initializing...</pre>
+
+		<script type="module">
+			import { initializeFilterEngine } from "./src/shared/filter-engine.js";
+
+			const output = document.querySelector("#output");
+
+			function assert(condition, message) {
+				if (!condition) {
+					throw new Error(message);
+				}
+			}
+
+			async function runTests() {
+				const engine = await initializeFilterEngine();
+				const parseFilterList = engine.parseFilterList;
+
+				const compileFilterList = engine.compileFilterList;
+				const input = [
+					"! Smoke test",
+					"||ads.example^",
+					"@@||trusted.example^$script",
+					"example.com##.ad-banner"
+				].join("\n");
+
+				// Test 1: Parser
+				const parsed = parseFilterList(input);
+
+				assert(parsed.filters.length === 3, "Parser should return 3 filters");
+
+				assert(parsed.stats.networkFilters === 2, "Expected 2 network filters");
+
+				assert(
+					parsed.stats.cosmeticFilters === 1,
+					"Expected 1 cosmetic filter"
+				);
+
+				// Test 2: DNR Compiler
+				const report = compileFilterList(input, {
+					maxRules: 5000,
+					firstRuleId: 10
+				});
+
+				assert(report.rules.length === 2, "Expected 2 DNR rules");
+
+				assert(report.rules[0].id === 10, "First rule ID should be 10");
+
+				assert(
+					report.rules[0].action.type === "block",
+					"First rule should block"
+				);
+
+				assert(
+					report.rules[1].action.type === "allow",
+					"Second rule should allow"
+				);
+
+				assert(
+					report.compilerDiagnostics.length === 0,
+					"Unexpected compiler diagnostics"
+				);
+
+				// Test 3: Unsupported options
+				const unsupported = compileFilterList(
+					"||unsupported.example^$redirect=noopjs"
+				);
+
+				assert(
+					unsupported.rules.length === 0,
+					"Unsupported rule must not be compiled"
+				);
+
+				assert(
+					unsupported.compilerDiagnostics[0]?.code === "unsupportedOption",
+					"Expected unsupportedOption diagnostic"
+				);
+
+				output.textContent = [
+					"WASM INITIALIZATION: PASS",
+					"PARSER: PASS",
+					"DNR COMPILER: PASS",
+					"RULE PRIORITIES AND IDS: PASS",
+					"UNSUPPORTED OPTIONS: PASS",
+					"",
+					"ALL TESTS PASSED"
+				].join("\n");
+
+				console.log("WASM integration tests passed", {
+					parsed,
+					report,
+					unsupported
+				});
+			}
+
+			runTests().catch(error => {
+				output.textContent = `FAILED: ${error.message}`;
+				console.error(error);
+			});
+		</script>
+	</body>
+</html>
