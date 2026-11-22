@@ -1,0 +1,13 @@
+{
+	"name": "rust-adblock",
+	"private": true,
+	"version": "0.1.0",
+	"description": "Cross-browser ad blocker with a Rust/WASM filter engine",
+	"scripts": {
+		"build:wasm": "wasm-pack build crates/wasm-bridge --target web --out-dir ../../extension/src/shared/wasm --out-name filter_engine",
+		"test:rust": "cargo test --workspace",
+		"fmt:rust": "cargo fmt --all -- --check",
+		"lint:rust": "cargo clippy --workspace --all-targets -- -D warnings"
+	},
+	"devDependencies": {}
+}

@@ -1,0 +1,394 @@
+//! Parser for the useful common subset of Adblock Plus filter-list syntax.
+//!
+//! Parsing is intentionally separate from DNR compilation. A syntactically
+//! valid filter is not necessarily representable by a browser's DNR API.
+
+use crate::model::{
+	CosmeticFilter, Diagnostic, DiagnosticLevel, DomainRestriction, Filter,
+	NetworkFilter, NetworkOptions, ParsedFilterList, ResourceType,
+};
+
+const COSMETIC_MARKERS: [(&str, bool); 2] = [("#@#", true), ("##", false)];
+
+pub fn parse_filter_list(input: &str) -> ParsedFilterList {
+	let mut parsed = ParsedFilterList::default();
+
+	for (index, raw_line) in input.lines().enumerate() {
+		let line_number = index + 1;
+		let line = raw_line.trim().trim_start_matches('\u{feff}').trim();
+
+		if is_ignored_line(line) {
+			continue;
+		}
+
+		if contains_cosmetic_marker(line) {
+			if let Some(filter) =
+				parse_cosmetic(line, line_number, &mut parsed.diagnostics)
+			{
+				parsed.filters.push(Filter::Cosmetic(filter));
+			}
+			// Do not reinterpret a malformed cosmetic rule as a network rule.
+			continue;
+		}
+
+		if line.contains("#?#") || line.contains("#$#") {
+			parsed.diagnostics.push(Diagnostic {
+				line: line_number,
+				level: DiagnosticLevel::Warning,
+				message: "Procedural or extended cosmetic syntax is not parsed yet"
+					.into(),
+				source: line.into(),
+			});
+			continue;
+		}
+
+		if let Some(filter) =
+			parse_network(line, line_number, &mut parsed.diagnostics)
+		{
+			parsed.filters.push(Filter::Network(filter));
+		}
+	}
+
+	parsed
+}
+
+fn is_ignored_line(line: &str) -> bool {
+	line.is_empty() || line.starts_with('!') || line == "[Adblock Plus 2.0]"
+}
+
+fn contains_cosmetic_marker(line: &str) -> bool {
+	COSMETIC_MARKERS
+		.iter()
+		.any(|(marker, _)| line.contains(marker))
+}
+
+fn parse_cosmetic(
+	line: &str,
+	line_number: usize,
+	diagnostics: &mut Vec<Diagnostic>,
+) -> Option<CosmeticFilter> {
+	let (marker, exception, marker_index) = COSMETIC_MARKERS
+		.iter()
+		.filter_map(|(marker, exception)| {
+			line.find(*marker).map(|index| (*marker, *exception, index))
+		})
+		.min_by_key(|(_, _, index)| *index)?;
+
+	let domain_part = &line[..marker_index];
+	let selector = line[marker_index + marker.len()..].trim();
+
+	if selector.is_empty() {
+		diagnostics.push(Diagnostic {
+			line: line_number,
+			level: DiagnosticLevel::Error,
+			message: "Cosmetic filter has an empty selector".into(),
+			source: line.into(),
+		});
+		return None;
+	}
+
+	let domains = if domain_part.is_empty() {
+		// A selector without a domain prefix is a generic cosmetic rule.
+		Vec::new()
+	} else {
+		match parse_cosmetic_domain_list(domain_part) {
+			Ok(domains) => domains,
+			Err(message) => {
+				diagnostics.push(Diagnostic {
+					line: line_number,
+					level: DiagnosticLevel::Error,
+					message,
+					source: line.into(),
+				});
+				return None;
+			}
+		}
+	};
+
+	Some(CosmeticFilter {
+		domains,
+		selector: selector.to_owned(),
+		exception,
+		source_line: line_number,
+	})
+}
+
+fn parse_network(
+	line: &str,
+	line_number: usize,
+	diagnostics: &mut Vec<Diagnostic>,
+) -> Option<NetworkFilter> {
+	let (exception, body) = match line.strip_prefix("@@") {
+		Some(body) => (true, body),
+		None => (false, line),
+	};
+
+	let (pattern, options_part) = split_pattern_and_options(body);
+	let pattern = pattern.trim();
+
+	if pattern.is_empty() {
+		diagnostics.push(Diagnostic {
+			line: line_number,
+			level: DiagnosticLevel::Error,
+			message: "Network filter has an empty URL pattern".into(),
+			source: line.into(),
+		});
+		return None;
+	}
+
+	let mut options = NetworkOptions::default();
+	if let Some(options_part) = options_part {
+		for option in options_part
+			.split(',')
+			.map(str::trim)
+			.filter(|part| !part.is_empty())
+		{
+			parse_network_option(
+				option,
+				&mut options,
+				line_number,
+				line,
+				diagnostics,
+			);
+		}
+	}
+
+	Some(NetworkFilter {
+		pattern: pattern.to_owned(),
+		exception,
+		options,
+		source_line: line_number,
+	})
+}
+
+/// Split at the last unescaped `$`, which is the option separator in ABP rules.
+fn split_pattern_and_options(body: &str) -> (&str, Option<&str>) {
+	let separator = body.char_indices().rev().find_map(|(index, character)| {
+		if character != '$' {
+			return None;
+		}
+
+		let preceding_backslashes = body[..index]
+			.chars()
+			.rev()
+			.take_while(|character| *character == '\\')
+			.count();
+
+		(preceding_backslashes % 2 == 0).then_some(index)
+	});
+
+	match separator {
+		Some(index) => (&body[..index], Some(&body[index + 1..])),
+		None => (body, None),
+	}
+}
+
+fn parse_network_option(
+	raw: &str,
+	options: &mut NetworkOptions,
+	line_number: usize,
+	source: &str,
+	diagnostics: &mut Vec<Diagnostic>,
+) {
+	let lower = raw.to_ascii_lowercase();
+
+	match lower.as_str() {
+		"third-party" => options.third_party = Some(true),
+		"~third-party" => options.third_party = Some(false),
+		"match-case" => options.match_case = true,
+		"important" => options.important = true,
+		"script" => options.resource_types.push(ResourceType::Script),
+		"image" => options.resource_types.push(ResourceType::Image),
+		"stylesheet" => options.resource_types.push(ResourceType::Stylesheet),
+		"object" | "object-subrequest" => {
+			options.resource_types.push(ResourceType::Object)
+		}
+		"xmlhttprequest" => {
+			options.resource_types.push(ResourceType::XmlHttpRequest)
+		}
+		"subdocument" => options.resource_types.push(ResourceType::SubFrame),
+		"document" => options.resource_types.push(ResourceType::MainFrame),
+		"font" => options.resource_types.push(ResourceType::Font),
+		"media" => options.resource_types.push(ResourceType::Media),
+		"ping" => options.resource_types.push(ResourceType::Ping),
+		"websocket" => options.resource_types.push(ResourceType::WebSocket),
+		"other" => options.resource_types.push(ResourceType::Other),
+		_ if lower.starts_with("domain=") => {
+			match parse_domain_list(&raw["domain=".len()..]) {
+				Ok(domains) if !domains.is_empty() => options.domains.extend(domains),
+				Ok(_) => {
+					options.unsupported.push(raw.to_owned());
+					diagnostics.push(Diagnostic {
+						line: line_number,
+						level: DiagnosticLevel::Error,
+						message: "The domain option must contain at least one domain"
+							.into(),
+						source: source.into(),
+					});
+				}
+				Err(message) => {
+					// Preserve the invalid option so a later compiler cannot
+					// accidentally broaden the rule by dropping its scope.
+					options.unsupported.push(raw.to_owned());
+					diagnostics.push(Diagnostic {
+						line: line_number,
+						level: DiagnosticLevel::Error,
+						message,
+						source: source.into(),
+					});
+				}
+			}
+		}
+		// These are valid ABP concepts, but need dedicated compilation paths.
+		// Preserve them instead of silently dropping semantic information.
+		_ => options.unsupported.push(raw.to_owned()),
+	}
+}
+
+fn parse_domain_list(value: &str) -> Result<Vec<DomainRestriction>, String> {
+	parse_domain_tokens(value, '|')
+}
+
+fn parse_cosmetic_domain_list(
+	value: &str,
+) -> Result<Vec<DomainRestriction>, String> {
+	// ABP cosmetic prefixes use commas, while the network `$domain=` option
+	// uses vertical bars. Keep those grammars distinct.
+	parse_domain_tokens(value, ',')
+}
+
+fn parse_domain_tokens(
+	value: &str,
+	separator: char,
+) -> Result<Vec<DomainRestriction>, String> {
+	if value.trim().is_empty() {
+		return Err("Domain list is empty".into());
+	}
+
+	let mut domains = Vec::new();
+	for token in value.split(separator).map(str::trim) {
+		if token.is_empty() {
+			return Err("Domain list contains an empty entry".into());
+		}
+
+		let (include, domain) = match token.strip_prefix('~') {
+			Some(domain) => (false, domain),
+			None => (true, token),
+		};
+
+		let normalized = domain.trim().trim_start_matches('.').to_ascii_lowercase();
+		if normalized.is_empty()
+			|| normalized.chars().any(char::is_whitespace)
+			|| normalized.contains('/')
+		{
+			return Err(format!("Invalid domain restriction: {token}"));
+		}
+
+		domains.push(DomainRestriction {
+			domain: normalized,
+			include,
+		});
+	}
+
+	Ok(domains)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn skips_blank_comments_and_header() {
+		let result = parse_filter_list(
+			"\u{feff}[Adblock Plus 2.0]\n! title\n\n||ads.example^\n",
+		);
+
+		assert_eq!(result.filters.len(), 1);
+		assert!(result.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn parses_network_filter_and_options() {
+		let result = parse_filter_list(
+			"||tracker.example^$script,third-party,domain=example.com|~news.example,match-case",
+		);
+
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network filter");
+		};
+
+		assert_eq!(filter.pattern, "||tracker.example^");
+		assert!(!filter.exception);
+		assert_eq!(filter.options.third_party, Some(true));
+		assert!(filter.options.match_case);
+		assert_eq!(filter.options.resource_types, vec![ResourceType::Script]);
+		assert_eq!(filter.options.domains.len(), 2);
+		assert!(filter.options.domains[0].include);
+		assert!(!filter.options.domains[1].include);
+		assert!(result.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn parses_exception_filter() {
+		let result = parse_filter_list("@@||ads.example^$image");
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network exception");
+		};
+
+		assert!(filter.exception);
+		assert_eq!(filter.pattern, "||ads.example^");
+		assert_eq!(filter.options.resource_types, vec![ResourceType::Image]);
+	}
+
+	#[test]
+	fn parses_cosmetic_filter_and_exception() {
+		let result = parse_filter_list(
+			"example.com,~news.example##.ad-slot\nexample.com#@#.sponsored\n##.generic-ad",
+		);
+
+		assert_eq!(result.filters.len(), 3);
+		let Filter::Cosmetic(first) = &result.filters[0] else {
+			panic!("expected cosmetic filter");
+		};
+		assert_eq!(first.selector, ".ad-slot");
+		assert!(!first.exception);
+		assert_eq!(first.domains.len(), 2);
+
+		let Filter::Cosmetic(second) = &result.filters[1] else {
+			panic!("expected cosmetic exception");
+		};
+		assert_eq!(second.selector, ".sponsored");
+		assert!(second.exception);
+
+		let Filter::Cosmetic(generic) = &result.filters[2] else {
+			panic!("expected generic cosmetic filter");
+		};
+		assert!(generic.domains.is_empty());
+		assert_eq!(generic.selector, ".generic-ad");
+	}
+
+	#[test]
+	fn escaped_dollar_is_not_treated_as_option_separator() {
+		let (pattern, options) = split_pattern_and_options(r"foo\$bar");
+		assert_eq!(pattern, r"foo\$bar");
+		assert_eq!(options, None);
+	}
+
+	#[test]
+	fn preserves_unknown_options_for_later_compilation() {
+		let result = parse_filter_list("||ads.example^$script,redirect= noopjs");
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network filter");
+		};
+
+		assert_eq!(filter.options.unsupported, vec!["redirect= noopjs"]);
+	}
+
+	#[test]
+	fn reports_malformed_cosmetic_filter() {
+		let result = parse_filter_list("example.com##");
+		assert!(result.filters.is_empty());
+		assert_eq!(result.diagnostics.len(), 1);
+		assert_eq!(result.diagnostics[0].level, DiagnosticLevel::Error);
+	}
+}
