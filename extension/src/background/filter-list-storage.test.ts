@@ -39,6 +39,38 @@ afterEach(() => {
 });
 
 describe("FilterListStorage", () => {
+	it("keeps downloaded cache separate from active snapshots", async () => {
+		const active = createRecord("easylist");
+
+		const candidate = {
+			...active,
+			version: "new-version",
+			content: "new downloaded content"
+		};
+
+		await storage.putActiveMany([active]);
+		await storage.putMany([candidate]);
+
+		await expect(storage.get("easylist")).resolves.toEqual(candidate);
+
+		await expect(storage.getActive("easylist")).resolves.toEqual(active);
+	});
+
+	it("saves multiple active snapshots together", async () => {
+		const records = [createRecord("easylist"), createRecord("easyprivacy")];
+
+		await storage.putActiveMany(records);
+
+		const stored = await storage.getAllActive();
+
+		expect(stored).toHaveLength(2);
+
+		expect(stored.map(record => record.id)).toEqual([
+			"easylist",
+			"easyprivacy"
+		]);
+	});
+
 	it("returns null for a missing list", async () => {
 		await expect(storage.get("easylist")).resolves.toBeNull();
 	});

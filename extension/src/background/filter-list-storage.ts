@@ -1,8 +1,10 @@
 import type { FilterListId } from "./filter-lists.js";
 
 const DATABASE_NAME = "block-filter-lists";
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
+
 const STORE_NAME = "filterLists";
+const ACTIVE_STORE_NAME = "activeFilterLists";
 
 export interface StoredFilterList {
 	id: FilterListId;
@@ -43,6 +45,57 @@ function transactionToPromise(transaction: IDBTransaction): Promise<void> {
 }
 
 export class FilterListStorage {
+	async getActive(id: FilterListId): Promise<StoredFilterList | null> {
+		const database = await this.openDatabase();
+
+		const transaction = database.transaction(ACTIVE_STORE_NAME, "readonly");
+
+		const done = transactionToPromise(transaction);
+
+		const result = await requestToPromise(
+			transaction.objectStore(ACTIVE_STORE_NAME).get(id)
+		);
+
+		await done;
+
+		return result ?? null;
+	}
+
+	async getAllActive(): Promise<StoredFilterList[]> {
+		const database = await this.openDatabase();
+
+		const transaction = database.transaction(ACTIVE_STORE_NAME, "readonly");
+
+		const done = transactionToPromise(transaction);
+
+		const result = await requestToPromise(
+			transaction.objectStore(ACTIVE_STORE_NAME).getAll()
+		);
+
+		await done;
+
+		return result.sort((a, b) => a.id.localeCompare(b.id));
+	}
+
+	async putActiveMany(records: readonly StoredFilterList[]): Promise<void> {
+		if (records.length === 0) {
+			return;
+		}
+
+		const database = await this.openDatabase();
+
+		const transaction = database.transaction(ACTIVE_STORE_NAME, "readwrite");
+
+		const done = transactionToPromise(transaction);
+
+		const store = transaction.objectStore(ACTIVE_STORE_NAME);
+
+		for (const record of records) {
+			store.put(record);
+		}
+
+		await done;
+	}
 	private databasePromise?: Promise<IDBDatabase>;
 
 	constructor(private readonly databaseName = DATABASE_NAME) {}
@@ -64,7 +117,15 @@ export class FilterListStorage {
 				const database = request.result;
 
 				if (!database.objectStoreNames.contains(STORE_NAME)) {
-					database.createObjectStore(STORE_NAME, { keyPath: "id" });
+					database.createObjectStore(STORE_NAME, {
+						keyPath: "id"
+					});
+				}
+
+				if (!database.objectStoreNames.contains(ACTIVE_STORE_NAME)) {
+					database.createObjectStore(ACTIVE_STORE_NAME, {
+						keyPath: "id"
+					});
 				}
 			};
 
