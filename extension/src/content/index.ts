@@ -1,4 +1,8 @@
 import { CosmeticDomObserver } from "./cosmetic-dom-observer.js";
+import {
+	startCosmeticContentScript,
+	type CosmeticContentScriptLifecycleState
+} from "./cosmetic-content-script-lifecycle.js";
 import { CosmeticSelectorProcessor } from "../cosmetic/cosmetic-selector-processor.js";
 import { getBrowserRuntimeApi } from "../shared/browser-content-api.js";
 import {
@@ -8,14 +12,14 @@ import {
 	isCosmeticSelectorsResponse
 } from "../shared/cosmetic-messages.js";
 
-type ContentScriptGlobal = typeof globalThis & {
-	__blockCosmeticContentScriptStarted?: boolean;
-	__blockCosmeticDomObserver?: CosmeticDomObserver;
-};
+type ContentScriptGlobal = typeof globalThis &
+	CosmeticContentScriptLifecycleState & {
+		__blockCosmeticDomObserver?: CosmeticDomObserver;
+	};
 
-async function applyCosmeticFiltering(): Promise<void> {
+async function applyCosmeticFiltering(): Promise<boolean> {
 	if (window.top !== window) {
-		return;
+		return false;
 	}
 
 	const runtime = getBrowserRuntimeApi();
@@ -28,7 +32,7 @@ async function applyCosmeticFiltering(): Promise<void> {
 		!selectorsResponse.ok ||
 		selectorsResponse.selectors.length === 0
 	) {
-		return;
+		return false;
 	}
 
 	const result = new CosmeticSelectorProcessor().process(
@@ -43,7 +47,7 @@ async function applyCosmeticFiltering(): Promise<void> {
 			);
 		}
 
-		return;
+		return false;
 	}
 
 	const applyResponse = await runtime.sendMessage({
@@ -58,7 +62,7 @@ async function applyCosmeticFiltering(): Promise<void> {
 				? applyResponse.error
 				: "Invalid background response."
 		);
-		return;
+		return false;
 	}
 
 	// A document-level user stylesheet automatically covers ordinary DOM
@@ -69,7 +73,10 @@ async function applyCosmeticFiltering(): Promise<void> {
 		observer.start(result.cssText);
 		contentScriptGlobal.__blockCosmeticDomObserver = observer;
 	} catch (error: unknown) {
-		console.warn("[Block] Could not enable dynamic Shadow DOM filtering.", error);
+		console.warn(
+			"[Block] Could not enable dynamic Shadow DOM filtering.",
+			error
+		);
 	}
 
 	if (result.diagnostics.length > 0) {
@@ -79,16 +86,18 @@ async function applyCosmeticFiltering(): Promise<void> {
 			result.diagnostics
 		);
 	}
+
+	return true;
 }
 
 const contentScriptGlobal = globalThis as ContentScriptGlobal;
 
-// `executeScript()` is also used for the already-open tab. Avoid processing
-// the same document twice if the user clicks the popup more than once.
-if (!contentScriptGlobal.__blockCosmeticContentScriptStarted) {
-	contentScriptGlobal.__blockCosmeticContentScriptStarted = true;
-
-	void applyCosmeticFiltering().catch((error: unknown) => {
+// `executeScript()` may run more than once in the same document. Coalesce
+// concurrent attempts and mark the document initialized only after CSS applies.
+startCosmeticContentScript(
+	contentScriptGlobal,
+	applyCosmeticFiltering,
+	error => {
 		console.error("[Block] Cosmetic content script failed.", error);
-	});
-}
+	}
+);
