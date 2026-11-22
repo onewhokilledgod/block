@@ -227,6 +227,7 @@ dependencies = [
  "filter-engine",
  "serde",
  "serde-wasm-bindgen",
+ "serde_json",
  "wasm-bindgen",
 ]
 
