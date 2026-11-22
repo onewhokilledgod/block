@@ -122,9 +122,9 @@ export class DnrRulesManager {
 	replaceManagedRules(rules: readonly DnrRule[]): Promise<RulesUpdateResult> {
 		const nextRules = Array.from(rules);
 
-		validateRules(nextRules);
-
 		return this.enqueue(async () => {
+			validateRules(nextRules);
+
 			const existingRules = await this.api.getDynamicRules();
 
 			const managedIds = existingRules

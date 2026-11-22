@@ -10,11 +10,13 @@
 		"lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
 		"check:extension": "tsc --project extension/tsconfig.json --noEmit",
 		"build:extension": "npm run check:extension && vite build --config extension/vite.config.mts",
-		"build": "npm run build:wasm && npm run build:extension"
+		"build": "npm run build:wasm && npm run build:extension",
+		"test:extension": "vitest run"
 	},
 	"devDependencies": {
 		"@types/node": "^26.6.6",
 		"typescript": "^7.0.2",
-		"vite": "^8.3.8"
+		"vite": "^8.3.8",
+		"vitest": "^4.1.12"
 	}
 }
