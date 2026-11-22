@@ -14,7 +14,7 @@
 
 	"host_permissions": ["https://easylist.to/*"],
 
-	"permissions": ["declarativeNetRequest", "storage"],
+	"permissions": ["declarativeNetRequest", "storage", "alarms"],
 
 	"background": {
 		"service_worker": "background.js",

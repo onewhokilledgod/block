@@ -236,7 +236,7 @@ export class FilterListManager {
 		private readonly storage: FilterListStorage,
 		options: FilterListManagerOptions = {}
 	) {
-		this.fetcher = options.fetcher ?? globalThis.fetch;
+		this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
 		this.now = options.now ?? Date.now;
 
 		this.timeoutMs = options.timeoutMs ?? FILTER_LIST_FETCH_TIMEOUT_MS;
@@ -369,14 +369,6 @@ export class FilterListManager {
 			const headers = new Headers({
 				Accept: "text/plain"
 			});
-
-			if (cached?.etag) {
-				headers.set("If-None-Match", cached.etag);
-			}
-
-			if (cached?.lastModified) {
-				headers.set("If-Modified-Since", cached.lastModified);
-			}
 
 			const response = await this.fetcher(definition.url, {
 				method: "GET",

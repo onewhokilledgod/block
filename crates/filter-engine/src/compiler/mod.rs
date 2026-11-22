@@ -100,18 +100,23 @@ pub enum DnrActionType {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DnrCondition {
-	pub url_filter: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub url_filter: Option<String>,
+
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub is_url_filter_case_sensitive: Option<bool>,
+
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub initiator_domains: Option<Vec<String>>,
+
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub excluded_initiator_domains: Option<Vec<String>>,
+
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub domain_type: Option<DnrDomainType>,
+
 	pub resource_types: Vec<DnrResourceType>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DnrDomainType {
@@ -324,7 +329,19 @@ fn compile_network_filter(
         ));
 	}
 
-	validate_url_filter(&filter.pattern)?;
+	let url_filter = if filter.pattern.is_empty() {
+		None
+	} else {
+		validate_url_filter(&filter.pattern)?;
+		Some(filter.pattern.clone())
+	};
+
+	let is_url_filter_case_sensitive =
+		if url_filter.is_some() && filter.options.match_case {
+			Some(true)
+		} else {
+			None
+		};
 	let (initiator_domains, excluded_initiator_domains) =
 		compile_domains(&filter.options.domains)?;
 
@@ -378,8 +395,8 @@ fn compile_network_filter(
 		priority,
 		action: DnrAction { action_type },
 		condition: DnrCondition {
-			url_filter: filter.pattern.clone(),
-			is_url_filter_case_sensitive: filter.options.match_case.then_some(true),
+			url_filter,
+			is_url_filter_case_sensitive,
 			initiator_domains,
 			excluded_initiator_domains,
 			domain_type: filter.options.third_party.map(|third_party| {
@@ -508,7 +525,7 @@ mod tests {
 		assert_eq!(rule.id, 1);
 		assert_eq!(rule.priority, PRIORITY_NORMAL_BLOCK);
 		assert_eq!(rule.action.action_type, DnrActionType::Block);
-		assert_eq!(rule.condition.url_filter, "||ads.example^");
+		assert_eq!(rule.condition.url_filter, Some("||ads.example^".to_owned()));
 		assert!(
 			rule
 				.condition
@@ -603,7 +620,10 @@ mod tests {
 			compile("||ads.example^$script,redirect=noopjs\n||good.example^");
 
 		assert_eq!(report.rules.len(), 1);
-		assert_eq!(report.rules[0].condition.url_filter, "||good.example^");
+		assert_eq!(
+			report.rules[0].condition.url_filter,
+			Some("||good.example^".to_owned())
+		);
 		assert_eq!(report.stats.skipped_network_filters, 1);
 		assert_eq!(
 			report.diagnostics[0].code,
@@ -694,5 +714,49 @@ mod tests {
 
 		assert_eq!(report.rules.len(), 1);
 		assert_eq!(report.stats.cosmetic_filters_deferred, 1);
+	}
+
+	#[test]
+	fn compiles_option_only_network_filter_without_url_filter() {
+		let report = compile("$third-party,xmlhttprequest,domain=mega4upload.net");
+
+		assert_eq!(report.rules.len(), 1);
+
+		let rule = &report.rules[0];
+		let condition = &rule.condition;
+
+		assert_eq!(condition.url_filter, None);
+		assert_eq!(condition.domain_type, Some(DnrDomainType::ThirdParty));
+		assert_eq!(
+			condition.resource_types,
+			vec![DnrResourceType::XmlHttpRequest]
+		);
+		assert_eq!(
+			condition.initiator_domains,
+			Some(vec!["mega4upload.net".to_owned()])
+		);
+
+		let json = serde_json::to_value(rule).expect("rule serializes");
+
+		assert!(
+			json["condition"].get("urlFilter").is_none(),
+			"urlFilter must be omitted when the ABP pattern is empty"
+		);
+		assert!(json["condition"].get("isUrlFilterCaseSensitive").is_none());
+	}
+
+	#[test]
+	fn skips_option_only_filter_with_unsupported_popup_option() {
+		let report = compile("$popup,domain=example.com");
+
+		assert!(report.rules.is_empty());
+		assert_eq!(report.stats.skipped_network_filters, 1);
+		assert_eq!(report.diagnostics.len(), 1);
+
+		assert_eq!(report.diagnostics[0].level, CompileDiagnosticLevel::Warning);
+		assert_eq!(
+			report.diagnostics[0].code,
+			CompileDiagnosticCode::UnsupportedOption
+		);
 	}
 }

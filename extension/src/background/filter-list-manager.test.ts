@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	FILTER_LISTS,
@@ -130,7 +130,7 @@ describe("FilterListManager", () => {
 		}
 	});
 
-	it("uses conditional requests and handles HTTP 304", async () => {
+	it("uses ordinary GET requests without conditional headers", async () => {
 		const records = await Promise.all([
 			createStoredRecord("easylist"),
 			createStoredRecord("easyprivacy")
@@ -138,19 +138,22 @@ describe("FilterListManager", () => {
 
 		await storage.putMany(records);
 
-		const fetcher = createFetcher(async (_url, init) => {
+		const requestedUrls: string[] = [];
+
+		const fetcher = createFetcher(async (url, init) => {
+			requestedUrls.push(url);
+
+			expect(init?.method).toBe("GET");
+
 			const headers = new Headers(init?.headers);
 
-			expect(headers.get("If-None-Match")).not.toBeNull();
+			expect(headers.get("Accept")).toBe("text/plain");
+			expect(headers.has("If-None-Match")).toBe(false);
+			expect(headers.has("If-Modified-Since")).toBe(false);
 
-			expect(headers.get("If-Modified-Since")).not.toBeNull();
+			const title = url.includes("easyprivacy") ? "EasyPrivacy" : "EasyList";
 
-			return new Response(null, {
-				status: 304,
-				headers: {
-					ETag: '"unchanged"'
-				}
-			});
+			return createResponse(title);
 		});
 
 		const manager = new FilterListManager(storage, {
@@ -160,14 +163,18 @@ describe("FilterListManager", () => {
 
 		const report = await manager.refreshAll();
 
-		expect(report.notModifiedCount).toBe(2);
+		expect(requestedUrls).toHaveLength(2);
+		expect(report.updatedCount).toBe(2);
+		expect(report.notModifiedCount).toBe(0);
 
 		const stored = await storage.getAll();
 
+		expect(stored).toHaveLength(2);
+
 		for (const record of stored) {
 			expect(record.checkedAt).toBe(3000);
-			expect(record.fetchedAt).toBe(1000);
-			expect(record.etag).toBe('"unchanged"');
+			expect(record.fetchedAt).toBe(3000);
+			expect(record.etag).toBe('"new-version"');
 		}
 	});
 
@@ -302,5 +309,32 @@ describe("FilterListManager", () => {
 		expect(
 			report.lists.every(item => item.warning?.includes("timed out"))
 		).toBe(true);
+	});
+
+	it("calls the default fetch with the global context", async () => {
+		const fetchMock = vi.fn(function (
+			this: unknown,
+			input: RequestInfo | URL
+		): Promise<Response> {
+			expect(this).toBe(globalThis);
+
+			const title = String(input).includes("easyprivacy")
+				? "EasyPrivacy"
+				: "EasyList";
+
+			return Promise.resolve(createResponse(title));
+		});
+
+		vi.stubGlobal("fetch", fetchMock);
+
+		try {
+			const manager = new FilterListManager(storage);
+
+			await manager.refreshAll();
+
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 });

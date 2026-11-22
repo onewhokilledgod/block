@@ -88,7 +88,7 @@ export interface DnrAction {
 }
 
 export interface DnrCondition {
-	urlFilter: string;
+	urlFilter?: string;
 	resourceTypes: string[];
 	isUrlFilterCaseSensitive?: boolean;
 	initiatorDomains?: string[];

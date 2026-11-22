@@ -126,4 +126,47 @@ describe("FilterListStorage", () => {
 			createRecord("easyprivacy")
 		);
 	});
+	it("commits staged snapshots without exposing partial active state", async () => {
+		const previous = createRecord("easylist");
+
+		const next = {
+			...createRecord("easylist"),
+			version: "202611231200",
+			content: "new candidate content"
+		};
+
+		await storage.putActiveMany([previous]);
+
+		await storage.stageActiveSnapshot([next], 2000);
+
+		// Staging must not change active state.
+		await expect(storage.getActive("easylist")).resolves.toEqual(previous);
+
+		const pending = await storage.getPendingActiveSnapshot();
+
+		expect(pending?.records).toEqual([next]);
+		expect(pending?.stagedAt).toBe(2000);
+
+		const committed = await storage.commitPendingActiveSnapshot();
+
+		expect(committed).toBe(true);
+
+		await expect(storage.getActive("easylist")).resolves.toEqual(next);
+
+		await expect(storage.getPendingActiveSnapshot()).resolves.toBeNull();
+	});
+
+	it("discards a pending snapshot without changing active state", async () => {
+		const previous = createRecord("easylist");
+		const candidate = createRecord("easyprivacy");
+
+		await storage.putActiveMany([previous]);
+		await storage.stageActiveSnapshot([candidate]);
+
+		await storage.discardPendingActiveSnapshot();
+
+		await expect(storage.getActive("easylist")).resolves.toEqual(previous);
+
+		await expect(storage.getPendingActiveSnapshot()).resolves.toBeNull();
+	});
 });

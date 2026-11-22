@@ -141,11 +141,17 @@ fn parse_network(
 	let (pattern, options_part) = split_pattern_and_options(body);
 	let pattern = pattern.trim();
 
-	if pattern.is_empty() {
+	let has_options = options_part
+		.map(|part| part.split(',').any(|option| !option.trim().is_empty()))
+		.unwrap_or(false);
+
+	if pattern.is_empty() && !has_options {
 		diagnostics.push(Diagnostic {
 			line: line_number,
 			level: DiagnosticLevel::Error,
-			message: "Network filter has an empty URL pattern".into(),
+			message:
+				"Network filter must contain a URL pattern or at least one option"
+					.into(),
 			source: line.into(),
 		});
 		return None;
@@ -423,5 +429,60 @@ mod tests {
 		assert!(result.filters.is_empty());
 		assert_eq!(result.diagnostics.len(), 1);
 		assert_eq!(result.diagnostics[0].level, DiagnosticLevel::Error);
+	}
+
+	#[test]
+	fn parses_network_filter_without_url_pattern() {
+		let result =
+			parse_filter_list("$third-party,xmlhttprequest,domain=mega4upload.net");
+
+		assert_eq!(result.filters.len(), 1);
+		assert!(result.diagnostics.is_empty());
+
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network filter");
+		};
+
+		assert_eq!(filter.pattern, "");
+		assert_eq!(filter.options.third_party, Some(true));
+
+		assert_eq!(
+			filter.options.resource_types,
+			vec![ResourceType::XmlHttpRequest]
+		);
+
+		assert_eq!(filter.options.domains.len(), 1);
+		assert_eq!(filter.options.domains[0].domain, "mega4upload.net");
+	}
+
+	#[test]
+	fn rejects_network_filter_without_pattern_or_options() {
+		let result = parse_filter_list("$");
+
+		assert!(result.filters.is_empty());
+		assert_eq!(result.diagnostics.len(), 1);
+		assert_eq!(result.diagnostics[0].level, DiagnosticLevel::Error);
+	}
+
+	#[test]
+	fn parses_option_only_exception_with_unsupported_option() {
+		let result = parse_filter_list("@@$generichide,domain=example.com");
+
+		assert_eq!(result.filters.len(), 1);
+		assert!(result.diagnostics.is_empty());
+
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network exception");
+		};
+
+		assert!(filter.exception);
+		assert_eq!(filter.pattern, "");
+
+		assert!(
+			filter
+				.options
+				.unsupported
+				.contains(&"generichide".to_owned())
+		);
 	}
 }

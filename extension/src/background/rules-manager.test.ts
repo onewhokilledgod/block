@@ -168,4 +168,45 @@ describe("DnrRulesManager", () => {
 
 		expect(mock.getCurrentIds()).toEqual([2]);
 	});
+
+	it("accepts rules without urlFilter", async () => {
+		const mock = createMockApi();
+		const manager = new DnrRulesManager(mock.api);
+
+		const rule: DnrRule = {
+			id: 10,
+			priority: 100,
+			action: { type: "block" },
+			condition: {
+				initiatorDomains: ["mega4upload.net"],
+				domainType: "thirdParty",
+				resourceTypes: ["xmlhttprequest"]
+			}
+		};
+
+		const result = await manager.replaceManagedRules([rule]);
+
+		expect(result.installedCount).toBe(1);
+		expect(mock.updateDynamicRules).toHaveBeenCalledWith({
+			removeRuleIds: [],
+			addRules: [rule]
+		});
+		expect(mock.getCurrentIds()).toEqual([10]);
+	});
+
+	it("rejects an empty urlFilter without modifying existing rules", async () => {
+		const mock = createMockApi([{ id: 1 }, { id: 6000 }]);
+		const manager = new DnrRulesManager(mock.api);
+
+		const rule = createRule(2);
+		rule.condition.urlFilter = "";
+
+		await expect(manager.replaceManagedRules([rule])).rejects.toThrow(
+			"invalid URL filter"
+		);
+
+		expect(mock.getDynamicRules).not.toHaveBeenCalled();
+		expect(mock.updateDynamicRules).not.toHaveBeenCalled();
+		expect(mock.getCurrentIds()).toEqual([1, 6000]);
+	});
 });

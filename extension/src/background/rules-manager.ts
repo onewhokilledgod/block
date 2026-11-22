@@ -64,9 +64,15 @@ function validateRules(rules: readonly DnrRule[]): void {
 			throw new TypeError(`Unsupported action for rule ${rule.id}.`);
 		}
 
+		if (!rule.condition || typeof rule.condition !== "object") {
+			throw new TypeError(`Rule ${rule.id} has an invalid condition.`);
+		}
+
+		const urlFilter = rule.condition.urlFilter;
+
 		if (
-			typeof rule.condition.urlFilter !== "string" ||
-			rule.condition.urlFilter.length === 0
+			urlFilter !== undefined &&
+			(typeof urlFilter !== "string" || urlFilter.length === 0)
 		) {
 			throw new TypeError(`Rule ${rule.id} has an invalid URL filter.`);
 		}
