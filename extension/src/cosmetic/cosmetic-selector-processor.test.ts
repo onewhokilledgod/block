@@ -206,4 +206,24 @@ describe("CosmeticSelectorProcessor", () => {
 			() => new CosmeticSelectorProcessor({ maxSelectorLength: 0 })
 		).toThrow(RangeError);
 	});
+
+	it("processes the full default selector budget and rejects the next selector", () => {
+		const { processor } = createProcessor();
+		const selectors = Array.from(
+			{ length: 10_000 },
+			(_, index) => `.ad-${index}`
+		);
+
+		const result = processor.process([...selectors, ".overflow"]);
+
+		expect(result.selectors).toHaveLength(10_000);
+		expect(result.selectors[0]).toBe(".ad-0");
+		expect(result.selectors[result.selectors.length - 1]).toBe(".ad-9999");
+		expect(result.diagnostics).toMatchObject([
+			{
+				code: "selectorLimitExceeded",
+				selector: ".overflow"
+			}
+		]);
+	});
 });

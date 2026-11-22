@@ -47,6 +47,7 @@ export class CosmeticDomObserver {
 
 	private stylesheet?: CSSStyleSheet;
 	private started = false;
+	private shadowRootLimitReported = false;
 	private observedShadowRoots = new WeakSet<ShadowRoot>();
 	private readonly shadowRoots = new Set<ShadowRoot>();
 	private readonly observers = new Set<MutationObserver>();
@@ -120,6 +121,7 @@ export class CosmeticDomObserver {
 
 		this.shadowRoots.clear();
 		this.observedShadowRoots = new WeakSet<ShadowRoot>();
+		this.shadowRootLimitReported = false;
 		this.stylesheet = undefined;
 		this.started = false;
 	}
@@ -142,23 +144,39 @@ export class CosmeticDomObserver {
 	}
 
 	private scanForOpenShadowRoots(node: Node): void {
-		const elements: Element[] = [];
+		if (this.shadowRootLimitReported) {
+			return;
+		}
 
 		if (node.nodeType === 1) {
-			elements.push(node as Element);
+			this.inspectElementForShadowRoot(node as Element);
 		}
 
 		// querySelectorAll also works on DocumentFragments and ShadowRoots.
 		const querySelectorAll = (node as ParentNode).querySelectorAll;
-		if (typeof querySelectorAll === "function") {
-			elements.push(...Array.from(querySelectorAll.call(node, "*")));
-		}
+		if (!this.shadowRootLimitReported && typeof querySelectorAll === "function") {
+			const descendants = querySelectorAll.call(node, "*");
 
-		for (const element of elements) {
-			const shadowRoot = element.shadowRoot;
-			if (shadowRoot) {
-				this.attachShadowRoot(shadowRoot);
+			// Iterate the static NodeList directly instead of copying every
+			// descendant into an additional array. Large subtrees are common on
+			// pages with many custom elements.
+			for (let index = 0; index < descendants.length; index += 1) {
+				const element = descendants[index];
+				if (element) {
+					this.inspectElementForShadowRoot(element);
+				}
+
+				if (this.shadowRootLimitReported) {
+					break;
+				}
 			}
+		}
+	}
+
+	private inspectElementForShadowRoot(element: Element): void {
+		const shadowRoot = element.shadowRoot;
+		if (shadowRoot) {
+			this.attachShadowRoot(shadowRoot);
 		}
 	}
 
@@ -168,10 +186,14 @@ export class CosmeticDomObserver {
 		}
 
 		if (this.shadowRoots.size >= this.maxShadowRoots) {
-			this.onError(
-				`The open Shadow DOM limit (${this.maxShadowRoots}) was reached; additional roots were skipped.`,
-				new RangeError("Maximum cosmetic Shadow DOM roots exceeded.")
-			);
+			if (!this.shadowRootLimitReported) {
+				this.shadowRootLimitReported = true;
+				this.onError(
+					`The open Shadow DOM limit (${this.maxShadowRoots}) was reached; additional roots were skipped.`,
+					new RangeError("Maximum cosmetic Shadow DOM roots exceeded.")
+				);
+			}
+
 			return;
 		}
 

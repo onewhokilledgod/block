@@ -241,4 +241,50 @@ describe("CosmeticDomObserver", () => {
 		expect(() => createHarness({ maxShadowRoots: -1 })).toThrow(RangeError);
 		expect(() => createHarness({ maxShadowRoots: 1.5 })).toThrow(RangeError);
 	});
+
+	it("reports the shadow root limit only once for a large batch", () => {
+		const { observer, documentElement, errors } = createHarness({
+			maxShadowRoots: 1
+		});
+		const entries = Array.from({ length: 32 }, () =>
+			createHostWithShadowRoot()
+		);
+
+		for (const entry of entries) {
+			documentElement.appendChild(entry.host);
+		}
+
+		observer.start(".ad { display: none !important; }");
+
+		expect(entries[0]?.shadowRoot.adoptedStyleSheets).toHaveLength(1);
+		expect(
+			entries.slice(1).every(entry => entry.shadowRoot.adoptedStyleSheets.length === 0)
+		).toBe(true);
+		expect(errors).toHaveLength(1);
+		expect(FakeMutationObserver.instances).toHaveLength(2);
+
+		// Later mutation batches must not repeat the same warning or restart
+		// expensive scans after the configured limit has already been reached.
+		FakeMutationObserver.instances[0]!.emit(
+			...entries.map(entry => entry.host)
+		);
+
+		expect(errors).toHaveLength(1);
+		expect(FakeMutationObserver.instances).toHaveLength(2);
+	});
+
+	it("does not create per-element observers for large ordinary DOM batches", () => {
+		const { observer, documentElement, errors } = createHarness();
+		const elements = Array.from({ length: 2_000 }, () => new FakeElement());
+
+		for (const element of elements) {
+			documentElement.appendChild(element);
+		}
+
+		observer.start(".ad { display: none !important; }");
+		FakeMutationObserver.instances[0]!.emit(...elements);
+
+		expect(FakeMutationObserver.instances).toHaveLength(1);
+		expect(errors).toHaveLength(0);
+	});
 });
