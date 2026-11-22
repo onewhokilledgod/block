@@ -1,20 +1,27 @@
 import { initializeFilterEngine } from "../shared/filter-engine.js";
 
 import { DnrRulesManager } from "./rules-manager.js";
+import { FilterEngineManager } from "./engine-manager.js";
 
-void initializeFilterEngine()
-	.then(async () => {
-		const rulesManager = new DnrRulesManager();
+async function initializeBackground(): Promise<void> {
+	const engine = await initializeFilterEngine();
 
-		const managedRuleIds = await rulesManager.getManagedRuleIds();
+	const rulesManager = new DnrRulesManager();
 
-		console.info("[Block] WASM filter engine initialized successfully.");
+	const engineManager = new FilterEngineManager(engine, rulesManager);
 
-		console.info(
-			`[Block] DNR manager initialized. ` +
-				`${managedRuleIds.length} managed dynamic rules installed.`
-		);
-	})
-	.catch((error: unknown) => {
-		console.error("[Block] Background initialization failed.", error);
-	});
+	const managedRuleIds = await engineManager.getManagedRuleIds();
+
+	console.info("[Block] WASM filter engine initialized successfully.");
+
+	console.info(
+		`[Block] DNR manager initialized. ` +
+			`${managedRuleIds.length} managed dynamic rules installed.`
+	);
+
+	console.info("[Block] Filter engine manager initialized successfully.");
+}
+
+void initializeBackground().catch((error: unknown) => {
+	console.error("[Block] Background initialization failed.", error);
+});
