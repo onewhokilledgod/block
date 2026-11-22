@@ -17,7 +17,7 @@ export default defineConfig({
 		outDir: resolve(extensionRoot, "dist"),
 		emptyOutDir: true,
 
-		target: ["chrome121", "firefox121"],
+		target: ["chrome121", "firefox128"],
 
 		// Не встраиваем WASM в JS через base64.
 		assetsInlineLimit: 0,

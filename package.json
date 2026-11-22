@@ -9,7 +9,7 @@
 		"fmt:rust": "cargo fmt --all -- --check",
 		"lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
 		"check:extension": "tsc --project extension/tsconfig.json --noEmit",
-		"build:extension": "npm run check:extension && vite build --config extension/vite.config.mts",
+		"build:extension": "npm run check:extension && vite build --config extension/vite.config.mts && vite build --config extension/vite.content.config.mts",
 		"build": "npm run build:wasm && npm run build:extension",
 		"test:extension": "vitest run"
 	},

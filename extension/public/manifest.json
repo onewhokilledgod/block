@@ -8,13 +8,21 @@
 
 	"browser_specific_settings": {
 		"gecko": {
-			"strict_min_version": "121.0"
+			"strict_min_version": "128.0"
 		}
 	},
 
 	"host_permissions": ["https://easylist.to/*"],
 
-	"permissions": ["declarativeNetRequest", "storage", "alarms"],
+	"optional_host_permissions": ["http://*/*", "https://*/*"],
+
+	"permissions": [
+		"activeTab",
+		"scripting",
+		"declarativeNetRequest",
+		"storage",
+		"alarms"
+	],
 
 	"background": {
 		"service_worker": "background.js",

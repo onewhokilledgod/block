@@ -1,4 +1,5 @@
 import { initializeFilterEngine } from "../shared/filter-engine.js";
+import type { FilterEngine } from "../shared/filter-engine.js";
 
 import { DnrRulesManager } from "./rules-manager.js";
 import { FilterEngineManager } from "./engine-manager.js";
@@ -8,9 +9,11 @@ import { FilterListManager } from "./filter-list-manager.js";
 import { FilterListSyncManager } from "./filter-list-sync-manager.js";
 
 import { FilterListSyncRuntime } from "./filter-list-sync-runtime.js";
+import { CosmeticContentRuntime } from "./cosmetic-content-runtime.js";
 
 interface BackgroundServices {
 	storage: FilterListStorage;
+	filterEngine: FilterEngine;
 	engineManager: FilterEngineManager;
 	syncManager: FilterListSyncManager;
 }
@@ -46,6 +49,7 @@ function getBackgroundServices(): Promise<BackgroundServices> {
 
 		return {
 			storage,
+			filterEngine: engine,
 			engineManager,
 			syncManager
 		};
@@ -69,8 +73,11 @@ const syncRuntime = new FilterListSyncRuntime(async () => {
 });
 
 // IMPORTANT:
-// Register lifecycle listeners before any asynchronous initialization.
+// Register listeners before any asynchronous initialization.
 syncRuntime.registerListeners();
+
+const cosmeticRuntime = new CosmeticContentRuntime(getBackgroundServices);
+cosmeticRuntime.registerListeners();
 
 async function initializeBackground(): Promise<void> {
 	const services = await getBackgroundServices();
