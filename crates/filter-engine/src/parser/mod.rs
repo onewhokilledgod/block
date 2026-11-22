@@ -53,7 +53,22 @@ pub fn parse_filter_list(input: &str) -> ParsedFilterList {
 }
 
 fn is_ignored_line(line: &str) -> bool {
-	line.is_empty() || line.starts_with('!') || line == "[Adblock Plus 2.0]"
+	line.is_empty() || line.starts_with('!') || is_abp_header(line)
+}
+
+fn is_abp_header(line: &str) -> bool {
+	let Some(version) = line.strip_prefix("[Adblock Plus ") else {
+		return false;
+	};
+
+	let Some(version) = version.strip_suffix(']') else {
+		return false;
+	};
+
+	!version.is_empty()
+		&& version.split('.').all(|part| {
+			!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
+		})
 }
 
 fn contains_cosmetic_marker(line: &str) -> bool {
@@ -296,6 +311,24 @@ fn parse_domain_tokens(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn skips_different_adblock_plus_header_versions() {
+		let result = parse_filter_list(
+			"[Adblock Plus 2.0]\n\
+         [Adblock Plus 1.1]\n\
+         ||ads.example^\n",
+		);
+
+		assert_eq!(result.filters.len(), 1);
+		assert!(result.diagnostics.is_empty());
+
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network filter");
+		};
+
+		assert_eq!(filter.pattern, "||ads.example^");
+	}
 
 	#[test]
 	fn skips_blank_comments_and_header() {
