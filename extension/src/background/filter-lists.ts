@@ -1,0 +1,55 @@
+export type FilterListId = "easylist" | "easyprivacy";
+
+export interface FilterListDefinition {
+	id: FilterListId;
+	name: string;
+	url: string;
+	expectedTitle: string;
+	firstRuleId: number;
+	ruleBudget: number;
+	maxBytes: number;
+	enabledByDefault: boolean;
+}
+
+const MAX_LIST_BYTES = 8 * 1024 * 1024;
+
+export const FILTER_LISTS: readonly FilterListDefinition[] = [
+	{
+		id: "easylist",
+		name: "EasyList",
+		url: "https://easylist.to/easylist/easylist.txt",
+		expectedTitle: "EasyList",
+		firstRuleId: 1,
+		ruleBudget: 3500,
+		maxBytes: MAX_LIST_BYTES,
+		enabledByDefault: true
+	},
+	{
+		id: "easyprivacy",
+		name: "EasyPrivacy",
+		url: "https://easylist.to/easylist/easyprivacy.txt",
+		expectedTitle: "EasyPrivacy",
+		firstRuleId: 3501,
+		ruleBudget: 1500,
+		maxBytes: MAX_LIST_BYTES,
+		enabledByDefault: true
+	}
+];
+
+export const FILTER_LIST_FETCH_TIMEOUT_MS = 30_000;
+
+export const FILTER_LIST_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+export const MIN_FILTER_LINES = 100;
+
+export function getFilterListDefinition(
+	id: FilterListId
+): FilterListDefinition {
+	const definition = FILTER_LISTS.find(list => list.id === id);
+
+	if (!definition) {
+		throw new Error(`Unknown filter list: ${id}`);
+	}
+
+	return definition;
+}

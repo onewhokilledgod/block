@@ -12,6 +12,8 @@
 		}
 	},
 
+	"host_permissions": ["https://easylist.to/*"],
+
 	"permissions": ["declarativeNetRequest", "storage"],
 
 	"background": {
