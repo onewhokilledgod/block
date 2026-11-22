@@ -8,6 +8,11 @@ if (!status || !enableButton) {
 	throw new Error("Popup controls were not found.");
 }
 
+// Capture the non-null DOM references after the runtime guard. TypeScript
+// does not retain the narrowing of the original variables inside callbacks.
+const popupStatus: HTMLParagraphElement = status;
+const popupEnableButton: HTMLButtonElement = enableButton;
+
 const api = getBrowserContentApi();
 const contentScriptManager = new CosmeticContentScriptManager(api);
 let activeTab: { id?: number; url?: string } | undefined;
@@ -18,44 +23,44 @@ async function initializePopup(): Promise<void> {
 		activeTab = tab;
 
 		if (!tab?.id || !tab.url) {
-			status.textContent = "The current tab is unavailable.";
+			popupStatus.textContent = "The current tab is unavailable.";
 			return;
 		}
 
 		const matchPattern = CosmeticContentScriptManager.getOriginMatchPattern(tab.url);
 
 		if (!matchPattern) {
-			status.textContent = "Cosmetic filtering is unavailable on this page.";
+			popupStatus.textContent = "Cosmetic filtering is unavailable on this page.";
 			return;
 		}
 
-		status.textContent = `Ready to enable cosmetic filtering for ${new URL(tab.url).hostname}.`;
-		enableButton.disabled = false;
+		popupStatus.textContent = `Ready to enable cosmetic filtering for ${new URL(tab.url).hostname}.`;
+		popupEnableButton.disabled = false;
 	} catch (error: unknown) {
-		status.textContent = "Could not inspect the current tab.";
+		popupStatus.textContent = "Could not inspect the current tab.";
 		console.error("[Block] Popup initialization failed.", error);
 	}
 }
 
-enableButton.addEventListener("click", () => {
+popupEnableButton.addEventListener("click", () => {
 	if (!activeTab?.id || !activeTab.url) {
 		return;
 	}
 
 	// The permission request starts directly inside the user click handler.
-	enableButton.disabled = true;
-	status.textContent = "Requesting access to this site...";
+	popupEnableButton.disabled = true;
+	popupStatus.textContent = "Requesting access to this site...";
 
 	void contentScriptManager.enableForTab(activeTab).then(
 		granted => {
-			status.textContent = granted
+			popupStatus.textContent = granted
 				? "Cosmetic filtering is enabled for this site."
 				: "Site access was not granted.";
-			enableButton.disabled = !granted;
+			popupEnableButton.disabled = !granted;
 		},
 		error => {
-			status.textContent = "Could not enable cosmetic filtering.";
-			enableButton.disabled = false;
+			popupStatus.textContent = "Could not enable cosmetic filtering.";
+			popupEnableButton.disabled = false;
 			console.error("[Block] Failed to enable cosmetic filtering.", error);
 		}
 	);
