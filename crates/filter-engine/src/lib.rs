@@ -3,6 +3,7 @@
 //! This crate deliberately has no browser or WebAssembly dependencies. It can
 //! be tested natively and later reused by the WASM bridge and native tooling.
 
+pub mod compiler;
 pub mod model;
 pub mod parser;
 
