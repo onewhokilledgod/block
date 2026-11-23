@@ -1,6 +1,7 @@
 import type { DnrRule } from "../shared/filter-engine.js";
 
 import { getDnrApi, type DeclarativeNetRequestApi } from "./browser-api.js";
+import type { RegexSupportResult } from "./browser-api.js";
 
 export const MANAGED_RULE_ID_MIN = 1;
 export const MANAGED_RULE_ID_MAX = 5_000;
@@ -69,6 +70,26 @@ function validateRules(rules: readonly DnrRule[]): void {
 		}
 
 		const urlFilter = rule.condition.urlFilter;
+		const regexFilter = rule.condition.regexFilter;
+
+		if (urlFilter !== undefined && regexFilter !== undefined) {
+			throw new TypeError(
+				`Rule ${rule.id} cannot specify both urlFilter and regexFilter.`
+			);
+		}
+
+		if (
+			regexFilter !== undefined &&
+			(typeof regexFilter !== "string" || regexFilter.length === 0)
+		) {
+			throw new TypeError(`Rule ${rule.id} has an invalid regex filter.`);
+		}
+
+		if (regexFilter !== undefined && /[^\x00-\x7F]/.test(regexFilter)) {
+			throw new TypeError(
+				`Rule ${rule.id} regex filter must contain only ASCII characters.`
+			);
+		}
 
 		if (
 			urlFilter !== undefined &&
@@ -104,6 +125,27 @@ export class DnrRulesManager {
 
 	constructor(api: DeclarativeNetRequestApi = getDnrApi()) {
 		this.api = api;
+	}
+
+	/**
+	 * Checks a regex with the browser's RE2 implementation before installation.
+	 */
+	isRegexSupported(
+		regex: string,
+		isCaseSensitive: boolean
+	): Promise<RegexSupportResult> {
+		const check = this.api.isRegexSupported;
+		if (!check) {
+			throw new Error(
+				"The browser does not expose declarativeNetRequest.isRegexSupported()."
+			);
+		}
+
+		return check.call(this.api, {
+			regex,
+			isCaseSensitive,
+			requireCapturing: false
+		});
 	}
 
 	/**

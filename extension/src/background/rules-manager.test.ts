@@ -49,16 +49,23 @@ function createMockApi(initial: ExistingDynamicRule[] = []) {
 			currentRules = [...remaining, ...addRules.map(({ id }) => ({ id }))];
 		}
 	);
+	const isRegexSupported = vi.fn(
+		async (): Promise<{ isSupported: boolean; reason?: string }> => ({
+			isSupported: true
+		})
+	);
 
 	const api: DeclarativeNetRequestApi = {
 		getDynamicRules,
-		updateDynamicRules
+		updateDynamicRules,
+		isRegexSupported
 	};
 
 	return {
 		api,
 		getDynamicRules,
 		updateDynamicRules,
+		isRegexSupported,
 		getCurrentIds: () => currentRules.map(({ id }) => id)
 	};
 }
@@ -110,6 +117,24 @@ describe("DnrRulesManager", () => {
 		expect(result.installedCount).toBe(0);
 
 		expect(mock.getCurrentIds()).toEqual([6000]);
+	});
+
+	it("delegates regex compatibility checks to the browser", async () => {
+		const mock = createMockApi();
+		mock.isRegexSupported.mockResolvedValue({
+			isSupported: false,
+			reason: "syntaxError"
+		});
+		const manager = new DnrRulesManager(mock.api);
+
+		await expect(
+			manager.isRegexSupported("^https?://ads\\.example/", false)
+		).resolves.toEqual({ isSupported: false, reason: "syntaxError" });
+		expect(mock.isRegexSupported).toHaveBeenCalledWith({
+			regex: "^https?://ads\\.example/",
+			isCaseSensitive: false,
+			requireCapturing: false
+		});
 	});
 
 	it("rejects duplicate IDs before calling the browser API", async () => {
@@ -208,5 +233,32 @@ describe("DnrRulesManager", () => {
 		expect(mock.getDynamicRules).not.toHaveBeenCalled();
 		expect(mock.updateDynamicRules).not.toHaveBeenCalled();
 		expect(mock.getCurrentIds()).toEqual([1, 6000]);
+	});
+
+	it("rejects rules that specify both URL and regex filters", async () => {
+		const mock = createMockApi();
+		const manager = new DnrRulesManager(mock.api);
+		const rule = createRule(2);
+		rule.condition.regexFilter = "^https?://ads\\.example/";
+
+		await expect(manager.replaceManagedRules([rule])).rejects.toThrow(
+			"both urlFilter and regexFilter"
+		);
+		expect(mock.getDynamicRules).not.toHaveBeenCalled();
+		expect(mock.updateDynamicRules).not.toHaveBeenCalled();
+	});
+
+	it("rejects non-ASCII regex filters before calling the browser API", async () => {
+		const mock = createMockApi();
+		const manager = new DnrRulesManager(mock.api);
+		const rule = createRule(2);
+		rule.condition.urlFilter = undefined;
+		rule.condition.regexFilter = "^https://café\\.example/";
+
+		await expect(manager.replaceManagedRules([rule])).rejects.toThrow(
+			"only ASCII characters"
+		);
+		expect(mock.getDynamicRules).not.toHaveBeenCalled();
+		expect(mock.updateDynamicRules).not.toHaveBeenCalled();
 	});
 });

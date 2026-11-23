@@ -81,7 +81,8 @@ export type CompilerDiagnosticCode =
 	| "unsupportedImportantException"
 	| "invalidFirstRuleId"
 	| "ruleLimitExceeded"
-	| "ruleIdExhausted";
+	| "ruleIdExhausted"
+	| "unsupportedRegex";
 
 export interface DnrAction {
 	type: DnrActionType;
@@ -89,6 +90,7 @@ export interface DnrAction {
 
 export interface DnrCondition {
 	urlFilter?: string;
+	regexFilter?: string;
 	resourceTypes: string[];
 	isUrlFilterCaseSensitive?: boolean;
 	initiatorDomains?: string[];

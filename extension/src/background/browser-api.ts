@@ -1,5 +1,16 @@
 import type { DnrRule } from "../shared/filter-engine.js";
 
+export interface RegexOptions {
+	regex: string;
+	isCaseSensitive?: boolean;
+	requireCapturing?: boolean;
+}
+
+export interface RegexSupportResult {
+	isSupported: boolean;
+	reason?: string;
+}
+
 export interface ExistingDynamicRule {
 	id: number;
 }
@@ -13,6 +24,8 @@ export interface DeclarativeNetRequestApi {
 	getDynamicRules(): Promise<ExistingDynamicRule[]>;
 
 	updateDynamicRules(options: DynamicRulesUpdate): Promise<void>;
+
+	isRegexSupported?(options: RegexOptions): Promise<RegexSupportResult>;
 }
 
 interface ExtensionApiNamespace {
