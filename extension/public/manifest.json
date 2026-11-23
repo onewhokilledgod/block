@@ -24,6 +24,16 @@
 		"alarms"
 	],
 
+	"declarative_net_request": {
+		"rule_resources": [
+			{
+				"id": "startup_compatibility",
+				"enabled": true,
+				"path": "rules/startup-compatibility.json"
+			}
+		]
+	},
+
 	"background": {
 		"service_worker": "background.js",
 		"scripts": ["background.js"],

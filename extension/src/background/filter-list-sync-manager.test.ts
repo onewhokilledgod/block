@@ -232,6 +232,61 @@ describe("FilterListSyncManager", () => {
 		await expect(storage.getAllActive()).resolves.toEqual(previous);
 	});
 
+	it("restores the last active snapshot when a forced refresh fails", async () => {
+		const records = await createRecords("active");
+		await storage.putActiveMany(records);
+
+		const downloader = {
+			refreshAll: vi.fn().mockRejectedValue(new Error("Network unavailable"))
+		};
+		const applier = createApplier();
+		const manager = new FilterListSyncManager(downloader, storage, applier);
+
+		const result = await manager.sync({ forceApply: true });
+
+		expect(result.skippedApplication).toBe(false);
+		expect(result.application).not.toBeNull();
+		expect(result.download.updatedCount).toBe(0);
+		expect(result.download.notModifiedCount).toBe(0);
+		expect(result.download.cachedCount).toBe(records.length);
+		expect(
+			result.download.lists.every(
+				item =>
+					item.status === "cached" &&
+					item.warning?.includes("Network unavailable")
+			)
+		).toBe(true);
+
+		expect(applier.applyFilterLists).toHaveBeenCalledWith(
+			records.map(record => ({
+				id: record.id,
+				content: record.content
+			}))
+		);
+
+		await expect(storage.getAllActive()).resolves.toEqual(records);
+		await expect(storage.getPendingActiveSnapshot()).resolves.toBeNull();
+	});
+
+	it("does not restore a corrupted active snapshot after refresh failure", async () => {
+		const records = await createRecords("active");
+		records[0]!.content += "\n||tampered.example^";
+		await storage.putActiveMany(records);
+
+		const downloader = {
+			refreshAll: vi.fn().mockRejectedValue(new Error("Network unavailable"))
+		};
+		const applier = createApplier();
+		const manager = new FilterListSyncManager(downloader, storage, applier);
+
+		await expect(manager.sync({ forceApply: true })).rejects.toThrow(
+			"active snapshot could not be validated"
+		);
+
+		expect(applier.applyFilterLists).not.toHaveBeenCalled();
+		await expect(storage.getAllActive()).resolves.toEqual(records);
+	});
+
 	it("preserves active snapshots when DNR application fails", async () => {
 		const previous = await createRecords("old");
 		const candidates = await createRecords("new");

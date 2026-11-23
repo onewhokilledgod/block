@@ -85,6 +85,47 @@ function toActiveSummaries(
 	}));
 }
 
+function getErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Describes restoration from the last verified active snapshot when a forced
+ * DNR rebuild cannot refresh the filter lists.
+ */
+function createActiveSnapshotFallbackReport(
+	records: readonly StoredFilterList[],
+	reason: string
+): FilterListRefreshReport {
+	const warning =
+		`Filter-list refresh failed: ${reason}. ` +
+		"The last verified active snapshot was restored.";
+
+	const lists = records.map(record => {
+		const definition = FILTER_LISTS.find(item => item.id === record.id);
+		if (!definition) {
+			throw new Error(`Unknown active filter list '${record.id}'.`);
+		}
+
+		return {
+			id: record.id,
+			name: definition.name,
+			status: "cached" as const,
+			version: record.version,
+			sha256: record.sha256,
+			byteLength: record.byteLength,
+			warning
+		};
+	});
+
+	return {
+		lists,
+		updatedCount: 0,
+		notModifiedCount: 0,
+		cachedCount: lists.length
+	};
+}
+
 function hasSameSnapshots(
 	first: readonly StoredFilterList[],
 	second: readonly StoredFilterList[]
@@ -168,7 +209,16 @@ export class FilterListSyncManager {
 		// Recover a previous interrupted DNR/IndexedDB commit first.
 		const recovered = await this.recoverPendingSnapshot();
 
-		const download = await this.downloader.refreshAll();
+		let download: FilterListRefreshReport;
+		try {
+			download = await this.downloader.refreshAll();
+		} catch (error: unknown) {
+			if (!this.forceApplyRequested) {
+				throw error;
+			}
+
+			return this.restoreActiveSnapshotAfterRefreshFailure(error, recovered);
+		}
 
 		const candidates = await this.loadCandidateRecords(download);
 
@@ -239,6 +289,76 @@ export class FilterListSyncManager {
 			application,
 			activeLists: toActiveSummaries(candidates),
 			skippedApplication: false,
+			recoveredPendingSnapshot: recovered !== null
+		};
+	}
+
+	/**
+	 * Restores the last successfully activated snapshot when a forced DNR
+	 * rebuild cannot refresh subscriptions.
+	 *
+	 * This does not relax the normal stale-cache policy: it only reinstalls
+	 * content that was already active and is validated again before use.
+	 */
+	private async restoreActiveSnapshotAfterRefreshFailure(
+		refreshError: unknown,
+		recovered: RecoveredSnapshot | null
+	): Promise<FilterListSyncResult> {
+		let records: StoredFilterList[];
+		let application: FilterListsApplyResult;
+
+		if (recovered) {
+			// Pending-snapshot recovery has already reapplied these rules and
+			// committed the active snapshot using the current compiler.
+			records = recovered.records;
+			application = recovered.application;
+		} else {
+			let active: StoredFilterList[];
+			try {
+				active = await this.storage.getAllActive();
+			} catch (error: unknown) {
+				throw new AggregateError(
+					[refreshError, error],
+					"Filter-list refresh failed and the active snapshot could not be loaded."
+				);
+			}
+
+			// A first installation has no previously active snapshot to restore.
+			if (active.length === 0) {
+				throw refreshError;
+			}
+
+			try {
+				records = await this.validateSnapshotRecords(active);
+			} catch (error: unknown) {
+				throw new AggregateError(
+					[refreshError, error],
+					"Filter-list refresh failed and the active snapshot could not be validated."
+				);
+			}
+
+			try {
+				application = await this.engineManager.applyFilterLists(
+					toFilterInputs(records)
+				);
+			} catch (error: unknown) {
+				throw new AggregateError(
+					[refreshError, error],
+					"Filter-list refresh failed and managed DNR rules could not be restored."
+				);
+			}
+		}
+
+		this.forceApplyRequested = false;
+
+		return {
+			download: createActiveSnapshotFallbackReport(
+				records,
+				getErrorMessage(refreshError)
+			),
+			application,
+			activeLists: toActiveSummaries(records),
+			skippedApplication: recovered !== null,
 			recoveredPendingSnapshot: recovered !== null
 		};
 	}

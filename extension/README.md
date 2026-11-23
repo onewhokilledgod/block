@@ -19,5 +19,12 @@ when the user activates it from the popup. The registered content script asks
 the background worker for matching selectors; the worker applies generated CSS
 through the browser scripting API, keeping styles independent of page CSP.
 
+The manifest includes an enabled empty static DNR ruleset as a startup
+compatibility workaround for Firefox 128–132, where dynamic rules could fail
+to become active after a browser restart. The background runtime also forces
+managed dynamic rules to be rebuilt from the verified active filter-list
+snapshot on every browser startup, even when downloaded list content is
+unchanged. Actual network filtering remains dynamically compiled and managed.
+
 Do not add remote executable code. Filter-list downloads are data and must be
 parsed as untrusted input.

@@ -70,7 +70,10 @@ export class FilterListSyncRuntime {
 		});
 
 		this.api.runtime.onStartup.addListener(() => {
-			this.triggerSync("browser startup");
+			// Rebuild managed dynamic rules even when list contents are unchanged.
+			// Firefox 132 and earlier may fail to restore their active DNR state
+			// after a browser restart.
+			this.triggerSync("browser startup", true);
 		});
 	}
 

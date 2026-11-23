@@ -234,6 +234,25 @@ describe("FilterListSyncRuntime", () => {
 		expect(syncAction).toHaveBeenCalledWith({ forceApply: true });
 	});
 
+	it("forces reapplication on browser startup", async () => {
+		const mock = createMockApi({
+			name: FILTER_LIST_SYNC_ALARM_NAME,
+			periodInMinutes: FILTER_LIST_SYNC_PERIOD_MINUTES
+		});
+		const syncAction = vi.fn(async (_options?: { forceApply?: boolean }) =>
+			createSyncResult()
+		);
+		const runtime = new FilterListSyncRuntime(syncAction, mock.api);
+
+		runtime.registerListeners();
+		mock.startupListeners[0]?.();
+
+		await vi.waitFor(() => {
+			expect(syncAction).toHaveBeenCalledTimes(1);
+		});
+		expect(syncAction).toHaveBeenCalledWith({ forceApply: true });
+	});
+
 	it("queues a forced pass if an update arrives during synchronization", async () => {
 		const mock = createMockApi({
 			name: FILTER_LIST_SYNC_ALARM_NAME,
