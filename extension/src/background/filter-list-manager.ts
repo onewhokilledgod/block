@@ -11,6 +11,9 @@ import {
 	type StoredFilterList
 } from "./filter-list-storage.js";
 
+/** Maximum age of a verified cache entry that may be used after a fetch error. */
+export const DEFAULT_FILTER_LIST_MAX_STALE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 export type FilterListRefreshStatus = "updated" | "not-modified" | "cached";
 
 export interface FilterListRefreshEntry {
@@ -50,6 +53,7 @@ export interface FilterListManagerOptions {
 	fetcher?: typeof fetch;
 	now?: () => number;
 	timeoutMs?: number;
+	maxStaleAgeMs?: number;
 }
 
 interface ListMetadata {
@@ -257,6 +261,7 @@ export class FilterListManager {
 	private readonly fetcher: typeof fetch;
 	private readonly now: () => number;
 	private readonly timeoutMs: number;
+	private readonly maxStaleAgeMs: number;
 
 	constructor(
 		private readonly storage: FilterListStorage,
@@ -266,6 +271,15 @@ export class FilterListManager {
 		this.now = options.now ?? Date.now;
 
 		this.timeoutMs = options.timeoutMs ?? FILTER_LIST_FETCH_TIMEOUT_MS;
+		this.maxStaleAgeMs =
+			options.maxStaleAgeMs ?? DEFAULT_FILTER_LIST_MAX_STALE_AGE_MS;
+
+		if (
+			!Number.isSafeInteger(this.maxStaleAgeMs) ||
+			this.maxStaleAgeMs < 0
+		) {
+			throw new RangeError("Invalid maximum stale cache age.");
+		}
 
 		if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0) {
 			throw new RangeError("Invalid fetch timeout.");
@@ -378,6 +392,21 @@ export class FilterListManager {
 		}
 	}
 
+	/**
+	 * A cached list may be used after a failed request only while its last
+	 * successful server check is within the configured fallback window.
+	 * `checkedAt` is intentional: a 304 response validates the cached content
+	 * without downloading it and updates this timestamp.
+	 */
+	private canUseCachedFallback(record: StoredFilterList): boolean {
+		if (!Number.isSafeInteger(record.checkedAt) || record.checkedAt < 0) {
+			return false;
+		}
+
+		const ageMs = Math.max(0, this.now() - record.checkedAt);
+		return ageMs <= this.maxStaleAgeMs;
+	}
+
 	private async fetchList(
 		definition: FilterListDefinition,
 		cached: StoredFilterList | null
@@ -486,7 +515,7 @@ export class FilterListManager {
 				? `Request timed out after ${this.timeoutMs} ms.`
 				: getErrorMessage(error);
 
-			if (cached) {
+			if (cached && this.canUseCachedFallback(cached)) {
 				return {
 					definition,
 					status: "cached",
@@ -496,10 +525,14 @@ export class FilterListManager {
 				};
 			}
 
+			const staleCacheWarning = cached
+				? ` Cached copy is too old for fallback; maximum age is ${this.maxStaleAgeMs} ms.`
+				: "";
+
 			return {
 				definition,
 				status: "failed",
-				reason
+				reason: `${reason}${staleCacheWarning}`
 			};
 		} finally {
 			clearTimeout(timeoutId);

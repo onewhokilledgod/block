@@ -15,7 +15,8 @@ import {
 
 import {
 	FilterListManager,
-	FilterListRefreshError
+	FilterListRefreshError,
+	DEFAULT_FILTER_LIST_MAX_STALE_AGE_MS
 } from "./filter-list-manager.js";
 
 let storage: FilterListStorage;
@@ -40,7 +41,10 @@ function createListContent(title: string): string {
 	].join("\n");
 }
 
-async function createStoredRecord(id: FilterListId): Promise<StoredFilterList> {
+async function createStoredRecord(
+	id: FilterListId,
+	timestamp = 1000
+): Promise<StoredFilterList> {
 	const definition = FILTER_LISTS.find(item => item.id === id)!;
 
 	const content = createListContent(definition.expectedTitle);
@@ -63,8 +67,8 @@ async function createStoredRecord(id: FilterListId): Promise<StoredFilterList> {
 		sha256,
 		byteLength: bytes.byteLength,
 		content,
-		fetchedAt: 1000,
-		checkedAt: 1000
+		fetchedAt: timestamp,
+		checkedAt: timestamp
 	};
 }
 
@@ -140,9 +144,11 @@ describe("FilterListManager", () => {
 	});
 
 	it("sends cached validators and reuses cached content for 304 responses", async () => {
+		const now = Date.now();
+		const staleTimestamp = now - DEFAULT_FILTER_LIST_MAX_STALE_AGE_MS - 1;
 		const records = await Promise.all([
-			createStoredRecord("easylist"),
-			createStoredRecord("easyprivacy")
+			createStoredRecord("easylist", staleTimestamp),
+			createStoredRecord("easyprivacy", staleTimestamp)
 		]);
 
 		await storage.putMany(records);
@@ -163,7 +169,7 @@ describe("FilterListManager", () => {
 
 		const manager = new FilterListManager(storage, {
 			fetcher,
-			now: () => 3000
+			now: () => now
 		});
 
 		const report = await manager.refreshAll();
@@ -183,14 +189,15 @@ describe("FilterListManager", () => {
 			expect(refreshed?.etag).toBe('"revalidated"');
 			expect(refreshed?.lastModified).toBe(original.lastModified);
 			expect(refreshed?.fetchedAt).toBe(original.fetchedAt);
-			expect(refreshed?.checkedAt).toBe(3000);
+			expect(refreshed?.checkedAt).toBe(now);
 		}
 	});
 
 	it("does not accept a cross-origin redirect that returns 304", async () => {
+		const now = Date.now();
 		const records = await Promise.all([
-			createStoredRecord("easylist"),
-			createStoredRecord("easyprivacy")
+			createStoredRecord("easylist", now),
+			createStoredRecord("easyprivacy", now)
 		]);
 		await storage.putMany(records);
 
@@ -203,7 +210,7 @@ describe("FilterListManager", () => {
 
 		const manager = new FilterListManager(storage, {
 			fetcher,
-			now: () => 3000
+			now: () => now + 3000
 		});
 
 		const report = await manager.refreshAll();
@@ -213,8 +220,8 @@ describe("FilterListManager", () => {
 		expect(
 			report.lists.find(item => item.id === "easylist")?.warning
 		).toContain("untrusted origin");
-		expect((await storage.get("easylist"))?.checkedAt).toBe(1000);
-		expect((await storage.get("easyprivacy"))?.checkedAt).toBe(3000);
+		expect((await storage.get("easylist"))?.checkedAt).toBe(now);
+		expect((await storage.get("easyprivacy"))?.checkedAt).toBe(now + 3000);
 	});
 
 	it("fails closed when a server returns 304 without a valid cache", async () => {
@@ -251,7 +258,8 @@ describe("FilterListManager", () => {
 		});
 
 		const manager = new FilterListManager(storage, {
-			fetcher
+			fetcher,
+			now: () => 1000
 		});
 
 		const report = await manager.refreshAll();
@@ -314,7 +322,8 @@ describe("FilterListManager", () => {
 		});
 
 		const manager = new FilterListManager(storage, {
-			fetcher
+			fetcher,
+			now: () => 1000
 		});
 
 		const report = await manager.refreshAll();
@@ -355,7 +364,8 @@ describe("FilterListManager", () => {
 
 		const manager = new FilterListManager(storage, {
 			fetcher,
-			timeoutMs: 10
+			timeoutMs: 10,
+			now: () => 1000
 		});
 
 		const report = await manager.refreshAll();
@@ -365,6 +375,75 @@ describe("FilterListManager", () => {
 		expect(
 			report.lists.every(item => item.warning?.includes("timed out"))
 		).toBe(true);
+	});
+
+	it("uses checkedAt rather than fetchedAt to determine cache age", async () => {
+		const now = Date.now();
+		const oldFetchTime = now - 30 * 24 * 60 * 60 * 1000;
+		const recentlyCheckedAt = now - 60 * 60 * 1000;
+		const records = await Promise.all([
+			createStoredRecord("easylist", oldFetchTime),
+			createStoredRecord("easyprivacy", oldFetchTime)
+		]);
+
+		for (const record of records) {
+			record.checkedAt = recentlyCheckedAt;
+		}
+		await storage.putMany(records);
+
+		const fetcher = createFetcher(async () =>
+			new Response("Unavailable", { status: 503 })
+		);
+		const manager = new FilterListManager(storage, {
+			fetcher,
+			now: () => now
+		});
+
+		const report = await manager.refreshAll();
+
+		expect(report.cachedCount).toBe(2);
+		for (const record of records) {
+			const stored = await storage.get(record.id);
+			expect(stored?.fetchedAt).toBe(oldFetchTime);
+			expect(stored?.checkedAt).toBe(recentlyCheckedAt);
+		}
+	});
+
+	it("does not use a cache older than the configured fallback window", async () => {
+		const now = Date.now();
+		const staleTimestamp = now - DEFAULT_FILTER_LIST_MAX_STALE_AGE_MS - 1;
+		const records = await Promise.all([
+			createStoredRecord("easylist", staleTimestamp),
+			createStoredRecord("easyprivacy", staleTimestamp)
+		]);
+		await storage.putMany(records);
+
+		const fetcher = createFetcher(async () =>
+			new Response("Unavailable", { status: 503 })
+		);
+		const manager = new FilterListManager(storage, {
+			fetcher,
+			now: () => now
+		});
+
+		await expect(manager.refreshAll()).rejects.toBeInstanceOf(
+			FilterListRefreshError
+		);
+
+		const stored = await storage.getAll();
+		expect(stored).toHaveLength(2);
+		expect(stored.map(record => record.sha256)).toEqual(
+			records.map(record => record.sha256)
+		);
+	});
+
+	it("rejects an invalid maximum stale cache age", () => {
+		expect(
+			() => new FilterListManager(storage, { maxStaleAgeMs: -1 })
+		).toThrow(RangeError);
+		expect(
+			() => new FilterListManager(storage, { maxStaleAgeMs: 1.5 })
+		).toThrow(RangeError);
 	});
 
 	it("calls the default fetch with the global context", async () => {
