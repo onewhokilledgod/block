@@ -182,8 +182,18 @@ fn parse_network(
 	})
 }
 
-/// Split at the last unescaped `$`, which is the option separator in ABP rules.
+/// Split ABP options without mistaking `$` inside slash-delimited regexes for the option separator.
 fn split_pattern_and_options(body: &str) -> (&str, Option<&str>) {
+	if let Some(end) = find_regex_closing_delimiter(body) {
+		let suffix = &body[end + 1..];
+		if suffix.is_empty() {
+			return (body, None);
+		}
+		if let Some(options) = suffix.strip_prefix('$') {
+			return (&body[..=end], Some(options));
+		}
+	}
+
 	let separator = body.char_indices().rev().find_map(|(index, character)| {
 		if character != '$' {
 			return None;
@@ -202,6 +212,35 @@ fn split_pattern_and_options(body: &str) -> (&str, Option<&str>) {
 		Some(index) => (&body[..index], Some(&body[index + 1..])),
 		None => (body, None),
 	}
+}
+
+/// Finds the closing slash, ignoring escaped slashes and slashes in character classes.
+fn find_regex_closing_delimiter(body: &str) -> Option<usize> {
+	if !body.starts_with('/') {
+		return None;
+	}
+
+	let mut escaped = false;
+	let mut in_character_class = false;
+	for (index, character) in body.char_indices().skip(1) {
+		if escaped {
+			escaped = false;
+			continue;
+		}
+		if character == '\\' {
+			escaped = true;
+			continue;
+		}
+
+		match character {
+			'[' if !in_character_class => in_character_class = true,
+			']' if in_character_class => in_character_class = false,
+			'/' if !in_character_class => return Some(index),
+			_ => {},
+		}
+	}
+
+	None
 }
 
 fn parse_network_option(
@@ -404,6 +443,32 @@ mod tests {
 		};
 		assert!(generic.domains.is_empty());
 		assert_eq!(generic.selector, ".generic-ad");
+	}
+	#[test]
+	fn regex_end_anchor_is_not_treated_as_an_option_separator() {
+		let input = r"/^https?:\/\/ads\.example\/foo$/";
+		let (pattern, options) = split_pattern_and_options(input);
+
+		assert_eq!(pattern, input);
+		assert_eq!(options, None);
+	}
+
+	#[test]
+	fn regex_options_are_split_after_the_closing_delimiter() {
+		let input = r"/^https?:\/\/ads\.example\/foo$/$script,match-case";
+		let (pattern, options) = split_pattern_and_options(input);
+
+		assert_eq!(pattern, r"/^https?:\/\/ads\.example\/foo$/");
+		assert_eq!(options, Some("script,match-case"));
+	}
+
+	#[test]
+	fn slash_inside_regex_character_class_is_not_the_closing_delimiter() {
+		let input = r"/assets[/]banner$/$image";
+		let (pattern, options) = split_pattern_and_options(input);
+
+		assert_eq!(pattern, r"/assets[/]banner$/");
+		assert_eq!(options, Some("image"));
 	}
 
 	#[test]
