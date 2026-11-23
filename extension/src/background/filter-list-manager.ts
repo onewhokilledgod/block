@@ -76,6 +76,32 @@ function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Rejects a response that was redirected outside the filter list's origin.
+ * Check every status, including 304, before trusting response metadata.
+ */
+function assertTrustedResponseOrigin(
+	response: Response,
+	definition: FilterListDefinition
+): void {
+	// Native fetch responses have a URL. An empty value is possible on
+	// synthetic Response objects used by tests and custom fetch adapters.
+	if (!response.url) {
+		return;
+	}
+
+	let responseOrigin: string;
+	try {
+		responseOrigin = new URL(response.url).origin;
+	} catch {
+		throw new Error("Filter list response has an invalid URL.");
+	}
+
+	if (responseOrigin !== new URL(definition.url).origin) {
+		throw new Error("Filter list redirected to an untrusted origin.");
+	}
+}
+
 function parseListMetadata(
 	content: string,
 	definition: FilterListDefinition
@@ -370,6 +396,14 @@ export class FilterListManager {
 				Accept: "text/plain"
 			});
 
+			if (cached?.etag) {
+				headers.set("If-None-Match", cached.etag);
+			}
+
+			if (cached?.lastModified) {
+				headers.set("If-Modified-Since", cached.lastModified);
+			}
+
 			const response = await this.fetcher(definition.url, {
 				method: "GET",
 				headers,
@@ -379,6 +413,10 @@ export class FilterListManager {
 				redirect: "follow",
 				referrerPolicy: "no-referrer"
 			});
+
+			// Validate the final URL before accepting either a 200 or 304
+			// response. A redirected 304 must not refresh untrusted metadata.
+			assertTrustedResponseOrigin(response, definition);
 
 			if (response.status === 304) {
 				if (!cached) {
@@ -403,17 +441,6 @@ export class FilterListManager {
 
 			if (response.status !== 200) {
 				throw new Error(`HTTP request failed with status ${response.status}.`);
-			}
-
-			// Do not silently accept a redirect to an unrelated host.
-			if (response.url) {
-				const originalOrigin = new URL(definition.url).origin;
-
-				const responseOrigin = new URL(response.url).origin;
-
-				if (responseOrigin !== originalOrigin) {
-					throw new Error("Filter list redirected to an untrusted origin.");
-				}
 			}
 
 			const bytes = await readResponseBytes(response, definition.maxBytes);

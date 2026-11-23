@@ -89,6 +89,15 @@ function createResponse(
 	});
 }
 
+function createNotModifiedResponse(
+	url: string,
+	extraHeaders: Record<string, string> = {}
+): Response {
+	const response = new Response(null, { status: 304, headers: extraHeaders });
+	Object.defineProperty(response, "url", { value: url });
+	return response;
+}
+
 beforeEach(() => {
 	databaseCounter += 1;
 
@@ -130,7 +139,7 @@ describe("FilterListManager", () => {
 		}
 	});
 
-	it("uses ordinary GET requests without conditional headers", async () => {
+	it("sends cached validators and reuses cached content for 304 responses", async () => {
 		const records = await Promise.all([
 			createStoredRecord("easylist"),
 			createStoredRecord("easyprivacy")
@@ -138,22 +147,18 @@ describe("FilterListManager", () => {
 
 		await storage.putMany(records);
 
-		const requestedUrls: string[] = [];
+		const requestedHeaders = new Map<string, Headers>();
 
 		const fetcher = createFetcher(async (url, init) => {
-			requestedUrls.push(url);
-
 			expect(init?.method).toBe("GET");
 
 			const headers = new Headers(init?.headers);
-
 			expect(headers.get("Accept")).toBe("text/plain");
-			expect(headers.has("If-None-Match")).toBe(false);
-			expect(headers.has("If-Modified-Since")).toBe(false);
+			requestedHeaders.set(url, headers);
 
-			const title = url.includes("easyprivacy") ? "EasyPrivacy" : "EasyList";
-
-			return createResponse(title);
+			return createNotModifiedResponse(url, {
+				ETag: '"revalidated"'
+			});
 		});
 
 		const manager = new FilterListManager(storage, {
@@ -162,20 +167,71 @@ describe("FilterListManager", () => {
 		});
 
 		const report = await manager.refreshAll();
+		expect(report.updatedCount).toBe(0);
+		expect(report.notModifiedCount).toBe(2);
+		expect(report.cachedCount).toBe(0);
 
-		expect(requestedUrls).toHaveLength(2);
-		expect(report.updatedCount).toBe(2);
-		expect(report.notModifiedCount).toBe(0);
+		for (const original of records) {
+			const headers = requestedHeaders.get(original.url);
+			expect(headers).toBeDefined();
+			expect(headers?.get("If-None-Match")).toBe(original.etag);
+			expect(headers?.get("If-Modified-Since")).toBe(original.lastModified);
 
-		const stored = await storage.getAll();
-
-		expect(stored).toHaveLength(2);
-
-		for (const record of stored) {
-			expect(record.checkedAt).toBe(3000);
-			expect(record.fetchedAt).toBe(3000);
-			expect(record.etag).toBe('"new-version"');
+			const refreshed = await storage.get(original.id);
+			expect(refreshed?.content).toBe(original.content);
+			expect(refreshed?.sha256).toBe(original.sha256);
+			expect(refreshed?.etag).toBe('"revalidated"');
+			expect(refreshed?.lastModified).toBe(original.lastModified);
+			expect(refreshed?.fetchedAt).toBe(original.fetchedAt);
+			expect(refreshed?.checkedAt).toBe(3000);
 		}
+	});
+
+	it("does not accept a cross-origin redirect that returns 304", async () => {
+		const records = await Promise.all([
+			createStoredRecord("easylist"),
+			createStoredRecord("easyprivacy")
+		]);
+		await storage.putMany(records);
+
+		const easyListUrl = FILTER_LISTS.find(item => item.id === "easylist")!.url;
+		const fetcher = createFetcher(async url =>
+			createNotModifiedResponse(
+				url === easyListUrl ? "https://attacker.example/list.txt" : url
+			)
+		);
+
+		const manager = new FilterListManager(storage, {
+			fetcher,
+			now: () => 3000
+		});
+
+		const report = await manager.refreshAll();
+
+		expect(report.cachedCount).toBe(1);
+		expect(report.notModifiedCount).toBe(1);
+		expect(
+			report.lists.find(item => item.id === "easylist")?.warning
+		).toContain("untrusted origin");
+		expect((await storage.get("easylist"))?.checkedAt).toBe(1000);
+		expect((await storage.get("easyprivacy"))?.checkedAt).toBe(3000);
+	});
+
+	it("fails closed when a server returns 304 without a valid cache", async () => {
+		const fetcher = createFetcher(async (url, init) => {
+			const headers = new Headers(init?.headers);
+			expect(headers.has("If-None-Match")).toBe(false);
+			expect(headers.has("If-Modified-Since")).toBe(false);
+			return createNotModifiedResponse(url);
+		});
+
+		const manager = new FilterListManager(storage, { fetcher });
+
+		await expect(manager.refreshAll()).rejects.toBeInstanceOf(
+			FilterListRefreshError
+		);
+		await expect(storage.getAll()).resolves.toHaveLength(0);
+
 	});
 
 	it("keeps the cached version when a new list is invalid", async () => {
