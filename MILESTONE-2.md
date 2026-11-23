@@ -22,13 +22,12 @@ these rules through the browser's DNR API.
   top-level navigations.
 - Configurable rule quotas and deterministic positive rule IDs.
 - ABP regular-expression filters are emitted as DNR `regexFilter` candidates; the browser adapter validates each expression with `isRegexSupported()` before installation.
+- ABP simple URL patterns containing literal backslashes are lowered to RE2 candidates and validated by the browser before installation.
 - Separate regex-rule quotas and diagnostics for expressions that cannot be represented safely.
 - Structured diagnostics for rules which cannot be compiled safely.
 
 ### Deliberately deferred
 
-- Escaped URL-pattern syntax. ABP escapes need normalization before they can
-  safely be passed to DNR.
 - Unknown modifiers, redirect/csp/header modifiers, and advanced options.
   A filter containing any unrecognized option is skipped as a whole.
 - Cosmetic filters. They are counted as deferred for the separate cosmetic

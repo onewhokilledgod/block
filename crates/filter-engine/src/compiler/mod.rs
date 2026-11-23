@@ -259,7 +259,7 @@ pub fn compile_filter_list(
 
 		report.stats.network_filters_seen += 1;
 
-		if is_abp_regex_filter(&network_filter.pattern)
+		if requires_browser_regex_filter(&network_filter.pattern)
 			&& report.stats.regex_rules >= options.limits.max_regex_rules
 		{
 			report.stats.skipped_network_filters += 1;
@@ -369,6 +369,9 @@ fn compile_network_filter(
 			));
 		}
 		(None, Some(expression.to_owned()))
+	} else if filter.pattern.contains('\\') {
+		let expression = compile_abp_url_pattern_regex(&filter.pattern)?;
+		(None, Some(expression))
 	} else {
 		validate_url_filter(&filter.pattern)?;
 		(Some(filter.pattern.clone()), None)
@@ -472,6 +475,91 @@ fn validate_url_filter(pattern: &str) -> Result<(), CompileError> {
 
 fn is_abp_regex_filter(pattern: &str) -> bool {
 	pattern.len() >= 2 && pattern.starts_with('/') && pattern.ends_with('/')
+}
+
+fn requires_browser_regex_filter(pattern: &str) -> bool {
+	is_abp_regex_filter(pattern) || pattern.contains('\\')
+}
+
+/// Converts an ASCII ABP simple URL pattern containing a literal backslash
+/// into an equivalent RE2 expression. This avoids relying on undocumented
+/// backslash handling in DNR's urlFilter grammar.
+fn compile_abp_url_pattern_regex(
+	pattern: &str,
+) -> Result<String, CompileError> {
+	if !pattern.is_ascii() {
+		return Err((
+			CompileDiagnosticCode::UnsupportedRegex,
+			"ABP URL patterns containing backslashes must be ASCII before conversion to DNR regex".into(),
+		));
+	}
+
+	// ABP treats repeated wildcards as one and ignores leading/trailing `*`.
+	let mut normalized = String::with_capacity(pattern.len());
+	let mut previous_wildcard = false;
+	for character in pattern.chars() {
+		if character == '*' {
+			if !previous_wildcard {
+				normalized.push(character);
+			}
+			previous_wildcard = true;
+		} else {
+			normalized.push(character);
+			previous_wildcard = false;
+		}
+	}
+	if normalized.starts_with('*') {
+		normalized.remove(0);
+	}
+	if normalized.ends_with('*') {
+		normalized.pop();
+	}
+
+	// In ABP, a trailing `^|` is equivalent to a trailing separator.
+	if normalized.ends_with("^|") {
+		normalized.pop();
+	}
+
+	let mut remaining = normalized.as_str();
+	let mut expression = String::new();
+	if let Some(rest) = remaining.strip_prefix("||") {
+		expression.push_str(r"^[\w-]+://(?:[^/]+\.)?");
+		remaining = rest;
+	} else if let Some(rest) = remaining.strip_prefix('|') {
+		expression.push('^');
+		remaining = rest;
+	}
+
+	let ends_with_separator = remaining.ends_with('^');
+	let ends_with_anchor = !ends_with_separator && remaining.ends_with('|');
+	if ends_with_separator || ends_with_anchor {
+		remaining = &remaining[..remaining.len() - 1];
+	}
+
+	for character in remaining.chars() {
+		match character {
+			'*' => expression.push_str(".*"),
+			'^' => expression.push_str(
+				r"(?:[\x00-\x24\x26-\x2C\x2F\x3A-\x40\x5B-\x5E\x60\x7B-\x7F]|$)",
+			),
+			'\\' | '.' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
+			| '$' => {
+				expression.push('\\');
+				expression.push(character);
+			}
+			_ => expression.push(character),
+		}
+	}
+
+	if ends_with_separator {
+		expression.push_str(
+			r"(?:[\x00-\x24\x26-\x2C\x2F\x3A-\x40\x5B-\x5E\x60\x7B-\x7F]|$)",
+		);
+	} else if ends_with_anchor {
+		expression.push('$');
+	}
+
+	Ok(expression)
 }
 
 fn compile_domains(
@@ -726,20 +814,60 @@ mod tests {
 	}
 
 	#[test]
-	fn compiles_regex_filters_and_skips_unsupported_escaped_url_patterns() {
+	fn compiles_regex_filters_and_backslash_url_patterns() {
 		let report = compile("/ads[0-9]+/\n||escaped\\.example^");
 
-		assert_eq!(report.rules.len(), 1);
+		assert_eq!(report.rules.len(), 2);
 		assert_eq!(report.rules[0].condition.url_filter, None);
 		assert_eq!(
 			report.rules[0].condition.regex_filter.as_deref(),
 			Some("ads[0-9]+")
 		);
-		assert_eq!(report.stats.regex_rules, 1);
+		assert_eq!(
+			report.rules[1].condition.regex_filter.as_deref(),
+			Some(
+				r"^[\w-]+://(?:[^/]+\.)?escaped\\\.example(?:[\x00-\x24\x26-\x2C\x2F\x3A-\x40\x5B-\x5E\x60\x7B-\x7F]|$)"
+			)
+		);
+		assert_eq!(report.rules[1].condition.url_filter, None);
+		assert_eq!(report.stats.regex_rules, 2);
+		assert_eq!(report.stats.skipped_network_filters, 0);
+		assert!(report.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn backslash_pattern_conversion_preserves_abp_wildcards_and_anchors() {
+		assert_eq!(
+			compile_abp_url_pattern_regex(r"|/ads\*banner^|").unwrap(),
+			r"^/ads\\.*banner(?:[\x00-\x24\x26-\x2C\x2F\x3A-\x40\x5B-\x5E\x60\x7B-\x7F]|$)"
+		);
+	}
+
+	#[test]
+	fn backslash_patterns_share_the_regex_rule_quota() {
+		let parsed = parse_filter_list("||escaped\\.example^\n||normal.example^");
+		let report = compile_filter_list(
+			&parsed,
+			CompileOptions {
+				limits: DnrLimits {
+					max_rules: 10,
+					max_regex_rules: 0,
+				},
+				first_rule_id: 1,
+			},
+		);
+
+		assert_eq!(report.rules.len(), 1);
+		assert_eq!(report.rules[0].id, 1);
+		assert_eq!(
+			report.rules[0].condition.url_filter.as_deref(),
+			Some("||normal.example^")
+		);
+		assert_eq!(report.stats.regex_rules, 0);
 		assert_eq!(report.stats.skipped_network_filters, 1);
 		assert_eq!(
 			report.diagnostics[0].code,
-			CompileDiagnosticCode::UnsupportedUrlPattern
+			CompileDiagnosticCode::RegexRuleLimitExceeded
 		);
 	}
 
