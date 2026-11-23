@@ -267,7 +267,7 @@ describe("FilterListSyncManager", () => {
 
 		const manager = new FilterListSyncManager(downloader, storage, applier);
 
-		const result = await manager.sync();
+		const result = await manager.sync({ forceApply: true });
 
 		expect(result.recoveredPendingSnapshot).toBe(true);
 		expect(result.skippedApplication).toBe(true);
@@ -298,6 +298,47 @@ describe("FilterListSyncManager", () => {
 		expect(result.application).toBeNull();
 
 		expect(applier.applyFilterLists).not.toHaveBeenCalled();
+	});
+
+	it("reapplies unchanged snapshots when forceApply is requested", async () => {
+		const records = await createRecords("unchanged");
+		await storage.putMany(records);
+		await storage.putActiveMany(records);
+
+		const downloader = createDownloader(records);
+		const applier = createApplier();
+		const manager = new FilterListSyncManager(downloader, storage, applier);
+
+		const result = await manager.sync({ forceApply: true });
+
+		expect(result.skippedApplication).toBe(false);
+		expect(result.application).not.toBeNull();
+		expect(applier.applyFilterLists).toHaveBeenCalledTimes(1);
+		await expect(storage.getAllActive()).resolves.toEqual(records);
+	});
+
+	it("retries a forced reapplication after a DNR failure", async () => {
+		const records = await createRecords("unchanged");
+		await storage.putMany(records);
+		await storage.putActiveMany(records);
+
+		const downloader = createDownloader(records);
+		const applier = createApplier();
+		applier.applyFilterLists.mockRejectedValueOnce(
+			new Error("DNR update failed")
+		);
+		const manager = new FilterListSyncManager(downloader, storage, applier);
+
+		await expect(
+			manager.sync({ forceApply: true })
+		).rejects.toThrow("DNR update failed");
+		await expect(storage.getPendingActiveSnapshot()).resolves.toBeNull();
+
+		const retry = await manager.sync();
+
+		expect(retry.skippedApplication).toBe(false);
+		expect(applier.applyFilterLists).toHaveBeenCalledTimes(2);
+		await expect(storage.getAllActive()).resolves.toEqual(records);
 	});
 
 	it("recovers after active snapshot commit failure", async () => {

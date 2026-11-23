@@ -5,14 +5,19 @@ import {
 	type BrowserLifecycleApi
 } from "./browser-lifecycle-api.js";
 
-import type { FilterListSyncResult } from "./filter-list-sync-manager.js";
+import type {
+	FilterListSyncOptions,
+	FilterListSyncResult
+} from "./filter-list-sync-manager.js";
 
 export const FILTER_LIST_SYNC_ALARM_NAME = "block-filter-list-refresh";
 
 export const FILTER_LIST_SYNC_PERIOD_MINUTES =
 	FILTER_LIST_REFRESH_INTERVAL_MS / 60_000;
 
-type SyncAction = () => Promise<FilterListSyncResult>;
+type SyncAction = (
+	options: FilterListSyncOptions
+) => Promise<FilterListSyncResult>;
 
 export interface SyncRuntimeLogger {
 	info(message: string, details?: unknown): void;
@@ -32,6 +37,7 @@ export class FilterListSyncRuntime {
 	private listenersRegistered = false;
 
 	private syncPromise?: Promise<FilterListSyncResult>;
+	private forceApplyRequested = false;
 
 	constructor(
 		private readonly syncAction: SyncAction,
@@ -60,7 +66,7 @@ export class FilterListSyncRuntime {
 		});
 
 		this.api.runtime.onInstalled.addListener(() => {
-			this.triggerSync("extension installed or updated");
+			this.triggerSync("extension installed or updated", true);
 		});
 
 		this.api.runtime.onStartup.addListener(() => {
@@ -91,7 +97,14 @@ export class FilterListSyncRuntime {
 	/**
 	 * Concurrent requests share one synchronization operation.
 	 */
-	runSync(reason: string): Promise<FilterListSyncResult> {
+	runSync(
+		reason: string,
+		options: FilterListSyncOptions = {}
+	): Promise<FilterListSyncResult> {
+		if (options.forceApply) {
+			this.forceApplyRequested = true;
+		}
+
 		if (this.syncPromise) {
 			return this.syncPromise;
 		}
@@ -99,11 +112,28 @@ export class FilterListSyncRuntime {
 		const operation = (async () => {
 			await this.ensureAlarm();
 
-			this.logger.info(
-				`[Block] Starting filter list synchronization: ${reason}.`
-			);
+			let result: FilterListSyncResult;
 
-			const result = await this.syncAction();
+
+			// An update can arrive while a normal sync is already running.
+			// Run one forced follow-up rather than losing it to promise coalescing.
+			do {
+				const forceApply = this.forceApplyRequested;
+				this.forceApplyRequested = false;
+
+				this.logger.info(
+					`[Block] Starting filter list synchronization: ${reason}.`
+				);
+
+				try {
+					result = await this.syncAction({ forceApply });
+				} catch (error: unknown) {
+					if (forceApply) {
+						this.forceApplyRequested = true;
+					}
+					throw error;
+				}
+			} while (this.forceApplyRequested);
 
 			this.logger.info(
 				"[Block] Filter list synchronization completed.",
@@ -131,8 +161,8 @@ export class FilterListSyncRuntime {
 		return operation;
 	}
 
-	private triggerSync(reason: string): void {
-		void this.runSync(reason).catch((error: unknown) => {
+	private triggerSync(reason: string, forceApply = false): void {
+		void this.runSync(reason, { forceApply }).catch((error: unknown) => {
 			this.logger.error(
 				`[Block] Filter list synchronization failed: ${reason}.`,
 				error

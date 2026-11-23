@@ -16,6 +16,13 @@ import type {
 	FilterListsApplyResult
 } from "./engine-manager.js";
 
+export interface FilterListSyncOptions {
+	/**
+	 * Recompile and replace DNR rules even when active list content is unchanged.
+	 */
+	forceApply?: boolean;
+}
+
 export interface ActiveListSummary {
 	id: FilterListId;
 	version: string;
@@ -113,6 +120,10 @@ async function calculateSha256(bytes: Uint8Array): Promise<string> {
 
 export class FilterListSyncManager {
 	private syncPromise?: Promise<FilterListSyncResult>;
+	/**
+	 * Keep a forced rebuild pending until application or journal recovery succeeds.
+	 */
+	private forceApplyRequested = false;
 
 	constructor(
 		private readonly downloader: FilterListDownloader,
@@ -124,7 +135,11 @@ export class FilterListSyncManager {
 	/**
 	 * Concurrent callers share one synchronization operation.
 	 */
-	sync(): Promise<FilterListSyncResult> {
+	sync(options: FilterListSyncOptions = {}): Promise<FilterListSyncResult> {
+		if (options.forceApply) {
+			this.forceApplyRequested = true;
+		}
+
 		if (this.syncPromise) {
 			return this.syncPromise;
 		}
@@ -160,8 +175,17 @@ export class FilterListSyncManager {
 		const active = await this.storage.getAllActive();
 
 		// Avoid reinstalling 5000 rules on every periodic refresh
-		// when all list contents are unchanged.
-		if (hasSameSnapshots(candidates, active)) {
+		// when all list contents are unchanged. An extension update can
+		// change compiler behavior without changing the downloaded lists,
+		// so it explicitly requests a fresh compilation and DNR replacement.
+		const recoveredWithCurrentCompiler = recovered !== null;
+		if (
+			hasSameSnapshots(candidates, active) &&
+			(!this.forceApplyRequested || recoveredWithCurrentCompiler)
+		) {
+			if (recoveredWithCurrentCompiler) {
+				this.forceApplyRequested = false;
+			}
 			return {
 				download,
 				application: recovered?.application ?? null,
@@ -206,6 +230,9 @@ export class FilterListSyncManager {
 			// synchronization can finish the active snapshot commit.
 			throw new ActiveSnapshotCommitError(application, error);
 		}
+
+		// Failures above leave the flag set so a later sync retries the rebuild.
+		this.forceApplyRequested = false;
 
 		return {
 			download,

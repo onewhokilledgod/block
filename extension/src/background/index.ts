@@ -66,10 +66,10 @@ function getBackgroundServices(): Promise<BackgroundServices> {
 	return creation;
 }
 
-const syncRuntime = new FilterListSyncRuntime(async () => {
+const syncRuntime = new FilterListSyncRuntime(async options => {
 	const services = await getBackgroundServices();
 
-	return services.syncManager.sync();
+	return services.syncManager.sync(options);
 });
 
 // IMPORTANT:

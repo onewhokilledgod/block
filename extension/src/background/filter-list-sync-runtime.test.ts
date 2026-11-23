@@ -215,6 +215,75 @@ describe("FilterListSyncRuntime", () => {
 		expect(syncAction).toHaveBeenCalledTimes(1);
 	});
 
+	it("forces reapplication on extension install or update", async () => {
+		const mock = createMockApi({
+			name: FILTER_LIST_SYNC_ALARM_NAME,
+			periodInMinutes: FILTER_LIST_SYNC_PERIOD_MINUTES
+		});
+		const syncAction = vi.fn(async (_options?: { forceApply?: boolean }) =>
+			createSyncResult()
+		);
+		const runtime = new FilterListSyncRuntime(syncAction, mock.api);
+
+		runtime.registerListeners();
+		mock.installedListeners[0]?.();
+
+		await vi.waitFor(() => {
+			expect(syncAction).toHaveBeenCalledTimes(1);
+		});
+		expect(syncAction).toHaveBeenCalledWith({ forceApply: true });
+	});
+
+	it("queues a forced pass if an update arrives during synchronization", async () => {
+		const mock = createMockApi({
+			name: FILTER_LIST_SYNC_ALARM_NAME,
+			periodInMinutes: FILTER_LIST_SYNC_PERIOD_MINUTES
+		});
+		let resolveFirst!: (result: FilterListSyncResult) => void;
+		const firstResult = new Promise<FilterListSyncResult>(resolve => {
+			resolveFirst = resolve;
+		});
+		const syncAction = vi.fn()
+			.mockImplementationOnce(() => firstResult)
+			.mockImplementation(async () => createSyncResult());
+		const runtime = new FilterListSyncRuntime(syncAction, mock.api);
+
+		const firstRun = runtime.runSync("browser startup");
+		await vi.waitFor(() => {
+			expect(syncAction).toHaveBeenCalledTimes(1);
+		});
+
+		const updateRun = runtime.runSync("extension updated", { forceApply: true });
+		expect(updateRun).toBe(firstRun);
+
+		resolveFirst(createSyncResult());
+		await updateRun;
+
+		expect(syncAction).toHaveBeenCalledTimes(2);
+		expect(syncAction).toHaveBeenNthCalledWith(1, { forceApply: false });
+		expect(syncAction).toHaveBeenNthCalledWith(2, { forceApply: true });
+	});
+
+	it("retains a forced request when synchronization fails", async () => {
+		const mock = createMockApi({
+			name: FILTER_LIST_SYNC_ALARM_NAME,
+			periodInMinutes: FILTER_LIST_SYNC_PERIOD_MINUTES
+		});
+		const syncAction = vi.fn()
+			.mockRejectedValueOnce(new Error("Network failure"))
+			.mockResolvedValueOnce(createSyncResult());
+		const runtime = new FilterListSyncRuntime(syncAction, mock.api);
+
+		await expect(
+			runtime.runSync("extension updated", { forceApply: true })
+		).rejects.toThrow("Network failure");
+		await expect(runtime.runSync("retry")).resolves.toEqual(createSyncResult());
+
+		expect(syncAction).toHaveBeenCalledTimes(2);
+		expect(syncAction).toHaveBeenNthCalledWith(1, { forceApply: true });
+		expect(syncAction).toHaveBeenNthCalledWith(2, { forceApply: true });
+	});
+
 	it("allows retry after a failed synchronization", async () => {
 		const mock = createMockApi({
 			name: FILTER_LIST_SYNC_ALARM_NAME,
