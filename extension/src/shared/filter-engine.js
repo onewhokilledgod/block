@@ -1,6 +1,7 @@
 import initWasm, {
 	parseFilterList as parseRaw,
-	compileFilterList as compileRaw
+	compileFilterList as compileRaw,
+	compileFilterLists as compileRawLists
 } from "./wasm/filter_engine.js";
 
 let initializationPromise;
@@ -15,6 +16,10 @@ export function initializeFilterEngine() {
 
 				compileFilterList(input, options) {
 					return compileRaw(input, options ?? undefined);
+				},
+
+				compileFilterLists(inputs) {
+					return compileRawLists(inputs);
 				}
 			}))
 			.catch(error => {

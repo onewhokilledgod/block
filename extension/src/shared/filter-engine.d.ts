@@ -75,6 +75,11 @@ export interface CompileOptions {
 	firstRuleId?: number;
 }
 
+export interface FilterListCompileInput {
+	content: string;
+	options?: CompileOptions;
+}
+
 export type DnrActionType = "block" | "allow";
 
 export type CompilerDiagnosticCode =
@@ -137,6 +142,8 @@ export interface FilterEngine {
 	parseFilterList(input: string): ParseReport;
 
 	compileFilterList(input: string, options?: CompileOptions): CompileReport;
+
+	compileFilterLists(inputs: FilterListCompileInput[]): CompileReport[];
 }
 
 export function initializeFilterEngine(): Promise<FilterEngine>;

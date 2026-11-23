@@ -4,6 +4,7 @@ import type {
 	CompileOptions,
 	CompileReport,
 	FilterEngine,
+	FilterListCompileInput,
 	ParseReport,
 	DnrRule
 } from "../shared/filter-engine.js";
@@ -77,6 +78,11 @@ function createEngine() {
 	const compileFilterList = vi.fn((_input: string, options?: CompileOptions) =>
 		createReport(options?.firstRuleId ?? 1)
 	);
+	const compileFilterLists = vi.fn((inputs: FilterListCompileInput[]) =>
+		inputs.map(({ content, options }) =>
+			compileFilterList(content, options)
+		)
+	);
 
 	const engine: FilterEngine = {
 		parseFilterList: vi.fn(
@@ -92,10 +98,11 @@ function createEngine() {
 				}
 			})
 		),
-		compileFilterList
+		compileFilterList,
+		compileFilterLists
 	};
 
-	return { engine, compileFilterList };
+	return { engine, compileFilterList, compileFilterLists };
 }
 
 function createMockRulesApi() {
@@ -137,7 +144,7 @@ function createMockRulesApi() {
 
 describe("FilterEngineManager", () => {
 	it("compiles both lists into separate ID ranges", async () => {
-		const { engine, compileFilterList } = createEngine();
+		const { engine, compileFilterList, compileFilterLists } = createEngine();
 		const mockApi = createMockRulesApi();
 
 		const manager = new FilterEngineManager(
@@ -156,6 +163,7 @@ describe("FilterEngineManager", () => {
 			}
 		]);
 
+		expect(compileFilterLists).toHaveBeenCalledTimes(1);
 		expect(compileFilterList).toHaveBeenNthCalledWith(1, "easylist content", {
 			maxRules: 3500,
 			firstRuleId: 1
@@ -225,15 +233,14 @@ describe("FilterEngineManager", () => {
 	});
 
 	it("does not install rules outside their allocated ID range", async () => {
-		const { engine } = createEngine();
+		const { engine, compileFilterLists } = createEngine();
 		const mockApi = createMockRulesApi();
 
-		engine.compileFilterList = vi.fn(
-			(_input: string, options?: CompileOptions) => {
+		compileFilterLists.mockImplementation(inputs =>
+			inputs.map(({ options }) => {
 				const firstRuleId = options?.firstRuleId ?? 1;
-
 				return createReport(firstRuleId + 4000);
-			}
+			})
 		);
 
 		const manager = new FilterEngineManager(

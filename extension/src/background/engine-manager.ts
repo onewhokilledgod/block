@@ -209,15 +209,25 @@ export class FilterEngineManager {
 			);
 		}
 
-		const compilations: FilterListCompilation[] = [];
-
-		for (const definition of requiredLists) {
-			const content = inputMap.get(definition.id)!;
-
-			const report = this.engine.compileFilterList(content, {
+		const compileInputs = requiredLists.map(definition => ({
+			content: inputMap.get(definition.id)!,
+			options: {
 				maxRules: definition.ruleBudget,
 				firstRuleId: definition.firstRuleId
-			});
+			}
+		}));
+		const reports = this.engine.compileFilterLists(compileInputs);
+
+		if (reports.length !== requiredLists.length) {
+			throw new Error(
+				"Filter engine returned an unexpected number of batch compilation reports."
+			);
+		}
+
+		const compilations: FilterListCompilation[] = [];
+
+		for (const [index, definition] of requiredLists.entries()) {
+			const report = reports[index]!;
 
 			const parserErrors = report.parserDiagnostics.filter(
 				diagnostic => diagnostic.level === "error"

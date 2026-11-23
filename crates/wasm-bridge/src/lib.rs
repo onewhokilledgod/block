@@ -6,7 +6,8 @@
 
 use filter_engine::compiler::{
 	CompileDiagnostic, CompileDiagnosticCode, CompileDiagnosticLevel,
-	CompileOptions, CompileStats, DnrLimits, DnrRule, compile_filter_list,
+	CompileOptions, CompileReport, CompileStats, DnrLimits, DnrRule,
+	compile_filter_list, compile_filter_lists as compile_parsed_filter_lists,
 };
 use filter_engine::model::{
 	Diagnostic, DiagnosticLevel, DomainRestriction, Filter, ParsedFilterList,
@@ -38,6 +39,22 @@ pub fn compile_filter_list_js(
 	let options = parse_compile_options(options)?;
 	let report = build_compile_report(input, options);
 	serialize_to_js(&report)
+}
+
+/// Compile multiple filter lists as one `$badfilter` matching group.
+///
+/// Each input keeps its own rule-ID range and compile limits. A marker in any
+/// input can disable an equivalent rule in any other input.
+#[wasm_bindgen(js_name = compileFilterLists)]
+pub fn compile_filter_lists_js(inputs: JsValue) -> Result<JsValue, JsValue> {
+	let inputs: Vec<BridgeFilterListInput> =
+		serde_wasm_bindgen::from_value(inputs).map_err(js_error)?;
+	if inputs.is_empty() {
+		return Err(js_error("At least one filter list is required."));
+	}
+
+	let reports = build_compile_reports(&inputs);
+	serialize_to_js(&reports)
 }
 
 fn serialize_to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
@@ -90,6 +107,14 @@ impl From<BridgeCompileOptions> for CompileOptions {
 			first_rule_id: options.first_rule_id,
 		}
 	}
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BridgeFilterListInput {
+	content: String,
+	#[serde(default)]
+	options: BridgeCompileOptions,
 }
 
 #[derive(Debug, Serialize)]
@@ -282,13 +307,43 @@ fn build_compile_report(
 	options: BridgeCompileOptions,
 ) -> CompileReportDto {
 	let parsed = parse_filter_list(input);
+	let compiled = compile_filter_list(&parsed, options.into());
+	build_compile_report_from_parsed(&parsed, compiled)
+}
+
+fn build_compile_reports(
+	inputs: &[BridgeFilterListInput],
+) -> Vec<CompileReportDto> {
+	let parsed = inputs
+		.iter()
+		.map(|input| parse_filter_list(&input.content))
+		.collect::<Vec<_>>();
+	let compile_inputs = parsed
+		.iter()
+		.zip(inputs.iter())
+		.map(|(parsed, input)| (parsed, input.options.into()))
+		.collect::<Vec<_>>();
+	let compiled = compile_parsed_filter_lists(&compile_inputs);
+
+	parsed
+		.iter()
+		.zip(compiled)
+		.map(|(parsed, compiled)| {
+			build_compile_report_from_parsed(parsed, compiled)
+		})
+		.collect()
+}
+
+fn build_compile_report_from_parsed(
+	parsed: &ParsedFilterList,
+	compiled: CompileReport,
+) -> CompileReportDto {
 	let parser_diagnostics = parsed
 		.diagnostics
 		.iter()
 		.map(to_parser_diagnostic_dto)
 		.collect();
-	let parser_stats = parse_stats(&parsed);
-	let compiled = compile_filter_list(&parsed, options.into());
+	let parser_stats = parse_stats(parsed);
 
 	CompileReportDto {
 		rules: compiled.rules,
@@ -492,5 +547,32 @@ mod tests {
 		assert_eq!(report.rules.len(), 1);
 		assert_eq!(report.rules[0].id, 42);
 		assert_eq!(report.compiler_stats.skipped_network_filters, 1);
+	}
+
+	#[test]
+	fn compile_reports_cancel_matching_rules_across_separate_lists() {
+		let inputs = vec![
+			BridgeFilterListInput {
+				content: "||shared.example^".into(),
+				options: BridgeCompileOptions::default(),
+			},
+			BridgeFilterListInput {
+				content: "||shared.example^$badfilter\n||keep.example^".into(),
+				options: BridgeCompileOptions {
+					first_rule_id: 3501,
+					..BridgeCompileOptions::default()
+				},
+			},
+		];
+		let reports = build_compile_reports(&inputs);
+		let value =
+			serde_json::to_value(reports).expect("batch compile reports serialize");
+
+		assert_eq!(value.as_array().expect("reports array").len(), 2);
+		assert!(value[0]["rules"].as_array().unwrap().is_empty());
+		assert_eq!(value[0]["compilerStats"]["skippedNetworkFilters"], 1);
+		assert_eq!(value[1]["rules"].as_array().unwrap().len(), 1);
+		assert_eq!(value[1]["rules"][0]["id"], 3501);
+		assert_eq!(value[1]["compilerStats"]["skippedNetworkFilters"], 1);
 	}
 }

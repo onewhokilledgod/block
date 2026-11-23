@@ -251,17 +251,50 @@ pub fn compile_filter_list(
 	parsed: &ParsedFilterList,
 	options: CompileOptions,
 ) -> CompileReport {
-	let mut report = CompileReport::default();
-	let badfilter_keys = parsed
-		.filters
+	let badfilter_keys = collect_badfilter_keys(std::iter::once(parsed));
+	compile_filter_list_with_badfilter_keys(parsed, options, &badfilter_keys)
+}
+
+/// Compile multiple lists as one semantic group while preserving one report
+/// and one independent rule-ID range for each input list.
+///
+/// `$badfilter` markers in any input list disable equivalent network filters
+/// in every other input list, regardless of input order.
+pub fn compile_filter_lists(
+	inputs: &[(&ParsedFilterList, CompileOptions)],
+) -> Vec<CompileReport> {
+	let badfilter_keys =
+		collect_badfilter_keys(inputs.iter().map(|(parsed, _)| *parsed));
+
+	inputs
 		.iter()
+		.map(|(parsed, options)| {
+			compile_filter_list_with_badfilter_keys(parsed, *options, &badfilter_keys)
+		})
+		.collect()
+}
+
+fn collect_badfilter_keys<'a>(
+	parsed_lists: impl IntoIterator<Item = &'a ParsedFilterList>,
+) -> HashSet<BadfilterKey> {
+	parsed_lists
+		.into_iter()
+		.flat_map(|parsed| parsed.filters.iter())
 		.filter_map(|filter| match filter {
 			Filter::Network(network_filter) if network_filter.options.badfilter => {
 				Some(badfilter_key(network_filter))
 			}
 			_ => None,
 		})
-		.collect::<HashSet<_>>();
+		.collect()
+}
+
+fn compile_filter_list_with_badfilter_keys(
+	parsed: &ParsedFilterList,
+	options: CompileOptions,
+	badfilter_keys: &HashSet<BadfilterKey>,
+) -> CompileReport {
+	let mut report = CompileReport::default();
 
 	if options.first_rule_id == 0 || options.first_rule_id > MAX_DNR_RULE_ID {
 		report.diagnostics.push(CompileDiagnostic {
@@ -846,6 +879,51 @@ mod tests {
 			Some("||keep.example^")
 		);
 		assert_eq!(report.stats.skipped_network_filters, 1);
+	}
+
+	#[test]
+	fn badfilter_disables_matching_rules_across_lists_even_when_marker_is_later()
+	{
+		let easylist = parse_filter_list("||shared.example^");
+		let easyprivacy =
+			parse_filter_list("||shared.example^$badfilter\n||privacy.example^");
+		let reports = compile_filter_lists(&[
+			(&easylist, CompileOptions::default()),
+			(
+				&easyprivacy,
+				CompileOptions {
+					first_rule_id: 3501,
+					..CompileOptions::default()
+				},
+			),
+		]);
+
+		assert!(reports[0].rules.is_empty());
+		assert_eq!(reports[0].stats.skipped_network_filters, 1);
+		assert_eq!(reports[1].rules.len(), 1);
+		assert_eq!(reports[1].rules[0].id, 3501);
+		assert_eq!(reports[1].stats.skipped_network_filters, 1);
+	}
+
+	#[test]
+	fn badfilter_from_first_list_disables_equivalent_rule_in_later_list() {
+		let easylist = parse_filter_list("||shared.example^$badfilter");
+		let easyprivacy = parse_filter_list("||shared.example^");
+		let reports = compile_filter_lists(&[
+			(&easylist, CompileOptions::default()),
+			(
+				&easyprivacy,
+				CompileOptions {
+					first_rule_id: 3501,
+					..CompileOptions::default()
+				},
+			),
+		]);
+
+		assert!(reports[0].rules.is_empty());
+		assert!(reports[1].rules.is_empty());
+		assert_eq!(reports[0].stats.skipped_network_filters, 1);
+		assert_eq!(reports[1].stats.skipped_network_filters, 1);
 	}
 
 	#[test]
