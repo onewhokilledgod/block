@@ -17,7 +17,7 @@ pub struct NetworkFilter {
 	pub source_line: usize,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct NetworkOptions {
 	pub domains: Vec<DomainRestriction>,
 	pub resource_types: Vec<ResourceType>,
@@ -27,17 +27,19 @@ pub struct NetworkOptions {
 	pub third_party: Option<bool>,
 	pub match_case: bool,
 	pub important: bool,
+	/// Marks a network filter that disables an equivalent filter in the same list.
+	pub badfilter: bool,
 	/// Options intentionally preserved for later compiler work.
 	pub unsupported: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DomainRestriction {
 	pub domain: String,
 	pub include: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ResourceType {
 	MainFrame,
 	SubFrame,

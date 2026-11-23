@@ -126,6 +126,7 @@ struct NetworkOptionsDto {
 	third_party: Option<bool>,
 	match_case: bool,
 	important: bool,
+	badfilter: bool,
 	unsupported: Vec<String>,
 }
 
@@ -324,6 +325,7 @@ fn to_filter_dto(filter: &Filter) -> ParsedFilterDto {
 				third_party: filter.options.third_party,
 				match_case: filter.options.match_case,
 				important: filter.options.important,
+				badfilter: filter.options.badfilter,
 				unsupported: filter.options.unsupported.clone(),
 			},
 			source_line: filter.source_line,
@@ -402,7 +404,7 @@ mod tests {
 	#[test]
 	fn parse_report_contains_typed_filters_and_parser_diagnostics() {
 		let report = build_parse_report(
-			"||ads.example^$script,~image\nexample.com##.ad\nexample.com##",
+			"||ads.example^$script,~image,badfilter\nexample.com##.ad\nexample.com##",
 		);
 		let value = serde_json::to_value(report).expect("parse report serializes");
 
@@ -412,6 +414,7 @@ mod tests {
 			value["filters"][0]["options"]["excludedResourceTypes"][0],
 			"image"
 		);
+		assert_eq!(value["filters"][0]["options"]["badfilter"], true);
 		assert_eq!(value["filters"][1]["kind"], "cosmetic");
 		assert_eq!(value["diagnostics"][0]["level"], "error");
 		assert_eq!(value["stats"]["totalFilters"], 2);

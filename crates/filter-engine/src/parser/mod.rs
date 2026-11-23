@@ -253,6 +253,7 @@ fn parse_network_option(
 	let lower = raw.to_ascii_lowercase();
 
 	match lower.as_str() {
+		"badfilter" => options.badfilter = true,
 		"third-party" => options.third_party = Some(true),
 		"~third-party" => options.third_party = Some(false),
 		"match-case" => options.match_case = true,
@@ -451,6 +452,19 @@ mod tests {
 			mixed.options.excluded_resource_types,
 			vec![ResourceType::Image]
 		);
+		assert!(result.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn parses_badfilter_option_case_insensitively() {
+		let result = parse_filter_list("||ads.example^$script,BADFILTER");
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network filter");
+		};
+
+		assert!(filter.options.badfilter);
+		assert_eq!(filter.options.resource_types, vec![ResourceType::Script]);
+		assert!(filter.options.unsupported.is_empty());
 		assert!(result.diagnostics.is_empty());
 	}
 

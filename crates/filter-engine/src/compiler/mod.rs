@@ -3,6 +3,8 @@
 //! The compiler deliberately rejects rules whose meaning cannot be represented
 //! faithfully. It never drops an unknown option and then emits a broader rule.
 
+use std::collections::HashSet;
+
 use serde::Serialize;
 
 use crate::model::{
@@ -211,6 +213,35 @@ pub struct CompileReport {
 	pub stats: CompileStats,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct BadfilterKey {
+	pattern: String,
+	exception: bool,
+	options: crate::model::NetworkOptions,
+}
+
+/// Builds a semantic key while ignoring the `$badfilter` marker itself.
+/// Option collections are sets in ABP semantics, so their input order does not
+/// affect whether two network filters refer to the same rule.
+fn badfilter_key(filter: &NetworkFilter) -> BadfilterKey {
+	let mut options = filter.options.clone();
+	options.badfilter = false;
+	options.domains.sort_unstable();
+	options.domains.dedup();
+	options.resource_types.sort_unstable();
+	options.resource_types.dedup();
+	options.excluded_resource_types.sort_unstable();
+	options.excluded_resource_types.dedup();
+	options.unsupported.sort_unstable();
+	options.unsupported.dedup();
+
+	BadfilterKey {
+		pattern: filter.pattern.clone(),
+		exception: filter.exception,
+		options,
+	}
+}
+
 /// Compile the network filters in a parsed list into DNR rules.
 ///
 /// Cosmetic rules are deliberately counted but not emitted here; they will be
@@ -221,6 +252,16 @@ pub fn compile_filter_list(
 	options: CompileOptions,
 ) -> CompileReport {
 	let mut report = CompileReport::default();
+	let badfilter_keys = parsed
+		.filters
+		.iter()
+		.filter_map(|filter| match filter {
+			Filter::Network(network_filter) if network_filter.options.badfilter => {
+				Some(badfilter_key(network_filter))
+			}
+			_ => None,
+		})
+		.collect::<HashSet<_>>();
 
 	if options.first_rule_id == 0 || options.first_rule_id > MAX_DNR_RULE_ID {
 		report.diagnostics.push(CompileDiagnostic {
@@ -258,6 +299,13 @@ pub fn compile_filter_list(
 		};
 
 		report.stats.network_filters_seen += 1;
+		if network_filter.options.badfilter
+			|| (!badfilter_keys.is_empty()
+				&& badfilter_keys.contains(&badfilter_key(network_filter)))
+		{
+			report.stats.skipped_network_filters += 1;
+			continue;
+		}
 
 		if requires_browser_regex_filter(&network_filter.pattern)
 			&& report.stats.regex_rules >= options.limits.max_regex_rules
@@ -762,6 +810,42 @@ mod tests {
 			report.diagnostics[0].code,
 			CompileDiagnosticCode::UnsupportedOption
 		);
+	}
+
+	#[test]
+	fn badfilter_disables_equivalent_network_rule_independent_of_option_order() {
+		let report = compile(
+			"||ads.example^$script,third-party,domain=example.com|~news.example\n\
+         ||ads.example^$badfilter,domain=example.com|~news.example,third-party,script\n\
+         ||keep.example^",
+		);
+
+		assert_eq!(report.rules.len(), 1);
+		assert_eq!(
+			report.rules[0].condition.url_filter.as_deref(),
+			Some("||keep.example^")
+		);
+		assert_eq!(report.stats.network_filters_seen, 3);
+		assert_eq!(report.stats.skipped_network_filters, 2);
+		assert!(report.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn badfilter_does_not_disable_an_exception_with_the_same_pattern() {
+		let report =
+			compile("@@||ads.example^\n||ads.example^$badfilter\n||keep.example^");
+
+		assert_eq!(report.rules.len(), 2);
+		assert_eq!(report.rules[0].action.action_type, DnrActionType::Allow);
+		assert_eq!(
+			report.rules[0].condition.url_filter.as_deref(),
+			Some("||ads.example^")
+		);
+		assert_eq!(
+			report.rules[1].condition.url_filter.as_deref(),
+			Some("||keep.example^")
+		);
+		assert_eq!(report.stats.skipped_network_filters, 1);
 	}
 
 	#[test]

@@ -26,6 +26,7 @@ export interface NetworkOptions {
 	thirdParty: boolean | null;
 	matchCase: boolean;
 	important: boolean;
+	badfilter: boolean;
 	unsupported: string[];
 }
 
