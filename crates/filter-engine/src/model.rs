@@ -29,6 +29,15 @@ pub struct NetworkOptions {
 	pub important: bool,
 	/// Marks a network filter that disables an equivalent filter in the same list.
 	pub badfilter: bool,
+	/// ABP sitekeys that scope a filter to signed pages. The current DNR
+	/// compiler preserves these as unsupported rather than dropping the scope.
+	pub sitekeys: Vec<String>,
+	/// Page-level exception modifiers. They are parsed for later page/cosmetic
+	/// handling and are not emitted as ordinary network allow rules.
+	pub document: bool,
+	pub elemhide: bool,
+	pub generichide: bool,
+	pub genericblock: bool,
 	/// Options intentionally preserved for later compiler work.
 	pub unsupported: Vec<String>,
 }

@@ -27,6 +27,11 @@ export interface NetworkOptions {
 	matchCase: boolean;
 	important: boolean;
 	badfilter: boolean;
+	sitekeys: string[];
+	document: boolean;
+	elemhide: boolean;
+	generichide: boolean;
+	genericblock: boolean;
 	unsupported: string[];
 }
 

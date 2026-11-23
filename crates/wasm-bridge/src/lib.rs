@@ -152,6 +152,11 @@ struct NetworkOptionsDto {
 	match_case: bool,
 	important: bool,
 	badfilter: bool,
+	sitekeys: Vec<String>,
+	document: bool,
+	elemhide: bool,
+	generichide: bool,
+	genericblock: bool,
 	unsupported: Vec<String>,
 }
 
@@ -381,6 +386,11 @@ fn to_filter_dto(filter: &Filter) -> ParsedFilterDto {
 				match_case: filter.options.match_case,
 				important: filter.options.important,
 				badfilter: filter.options.badfilter,
+				sitekeys: filter.options.sitekeys.clone(),
+				document: filter.options.document,
+				elemhide: filter.options.elemhide,
+				generichide: filter.options.generichide,
+				genericblock: filter.options.genericblock,
 				unsupported: filter.options.unsupported.clone(),
 			},
 			source_line: filter.source_line,
@@ -476,6 +486,22 @@ mod tests {
 		assert_eq!(value["stats"]["networkFilters"], 1);
 		assert_eq!(value["stats"]["cosmeticFilters"], 1);
 		assert_eq!(value["stats"]["errors"], 1);
+	}
+
+	#[test]
+	fn parse_report_serializes_sitekeys_and_page_scope_exception_modifiers() {
+		let report = build_parse_report(
+			"@@||example.com^$document,elemhide,generichide,genericblock,sitekey=keyA|keyB",
+		);
+		let value = serde_json::to_value(report).expect("parse report serializes");
+
+		let options = &value["filters"][0]["options"];
+		assert_eq!(options["document"], true);
+		assert_eq!(options["elemhide"], true);
+		assert_eq!(options["generichide"], true);
+		assert_eq!(options["genericblock"], true);
+		assert_eq!(options["sitekeys"][0], "keyA");
+		assert_eq!(options["sitekeys"][1], "keyB");
 	}
 
 	#[test]

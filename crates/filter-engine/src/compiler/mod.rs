@@ -232,6 +232,8 @@ fn badfilter_key(filter: &NetworkFilter) -> BadfilterKey {
 	options.resource_types.dedup();
 	options.excluded_resource_types.sort_unstable();
 	options.excluded_resource_types.dedup();
+	options.sitekeys.sort_unstable();
+	options.sitekeys.dedup();
 	options.unsupported.sort_unstable();
 	options.unsupported.dedup();
 
@@ -422,6 +424,12 @@ fn compile_network_filter(
 	filter: &NetworkFilter,
 	rule_id: u32,
 ) -> Result<DnrRule, CompileError> {
+	if !filter.options.sitekeys.is_empty() {
+		return Err((
+			CompileDiagnosticCode::UnsupportedOption,
+			"This filter uses $sitekey, which the DNR compiler cannot enforce".into(),
+		));
+	}
 	if !filter.options.unsupported.is_empty() {
 		return Err((
 			CompileDiagnosticCode::UnsupportedOption,
@@ -748,6 +756,49 @@ mod tests {
 	fn compile(input: &str) -> CompileReport {
 		let parsed = parse_filter_list(input);
 		compile_filter_list(&parsed, CompileOptions::default())
+	}
+
+	#[test]
+	fn page_scope_exceptions_are_not_emitted_as_broad_network_allow_rules() {
+		for modifier in ["document", "elemhide", "generichide", "genericblock"] {
+			let report = compile(&format!("@@||example.com^${modifier}"));
+
+			assert!(report.rules.is_empty(), "modifier: {modifier}");
+			assert_eq!(report.stats.skipped_network_filters, 1);
+			assert_eq!(
+				report.diagnostics[0].code,
+				CompileDiagnosticCode::UnsupportedOption,
+				"modifier: {modifier}"
+			);
+		}
+	}
+
+	#[test]
+	fn badfilter_matches_sitekey_lists_independent_of_option_order() {
+		let report = compile(
+			"||ads.example^$script,sitekey=firstKey|secondKey\n\
+			||ads.example^$sitekey=secondKey|firstKey,script,badfilter\n\
+			||keep.example^",
+		);
+
+		assert_eq!(report.rules.len(), 1);
+		assert_eq!(
+			report.rules[0].condition.url_filter.as_deref(),
+			Some("||keep.example^")
+		);
+		assert_eq!(report.stats.skipped_network_filters, 2);
+	}
+
+	#[test]
+	fn sitekey_scoped_rules_are_not_compiled_without_sitekey_matching() {
+		let report = compile("||ads.example^$sitekey=firstKey|secondKey");
+
+		assert!(report.rules.is_empty());
+		assert_eq!(report.stats.skipped_network_filters, 1);
+		assert_eq!(
+			report.diagnostics[0].code,
+			CompileDiagnosticCode::UnsupportedOption
+		);
 	}
 
 	#[test]

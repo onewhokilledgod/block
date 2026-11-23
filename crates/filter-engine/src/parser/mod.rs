@@ -9,6 +9,7 @@ use crate::model::{
 };
 
 const COSMETIC_MARKERS: [(&str, bool); 2] = [("#@#", true), ("##", false)];
+const UNSUPPORTED_COSMETIC_MARKERS: [&str; 4] = ["#@?#", "#?#", "#@$#", "#$#"];
 
 pub fn parse_filter_list(input: &str) -> ParsedFilterList {
 	let mut parsed = ParsedFilterList::default();
@@ -18,6 +19,16 @@ pub fn parse_filter_list(input: &str) -> ParsedFilterList {
 		let line = raw_line.trim().trim_start_matches('\u{feff}').trim();
 
 		if is_ignored_line(line) {
+			continue;
+		}
+
+		if contains_unsupported_cosmetic_syntax(line) {
+			parsed.diagnostics.push(Diagnostic {
+				line: line_number,
+				level: DiagnosticLevel::Warning,
+				message: "Extended cosmetic or snippet syntax is not parsed yet".into(),
+				source: line.into(),
+			});
 			continue;
 		}
 
@@ -50,6 +61,12 @@ pub fn parse_filter_list(input: &str) -> ParsedFilterList {
 	}
 
 	parsed
+}
+
+fn contains_unsupported_cosmetic_syntax(line: &str) -> bool {
+	UNSUPPORTED_COSMETIC_MARKERS
+		.iter()
+		.any(|marker| line.contains(marker))
 }
 
 fn is_ignored_line(line: &str) -> bool {
@@ -166,6 +183,7 @@ fn parse_network(
 		{
 			parse_network_option(
 				option,
+				exception,
 				&mut options,
 				line_number,
 				line,
@@ -194,7 +212,7 @@ fn split_pattern_and_options(body: &str) -> (&str, Option<&str>) {
 		}
 	}
 
-	let separator = body.char_indices().rev().find_map(|(index, character)| {
+	let separator = body.char_indices().find_map(|(index, character)| {
 		if character != '$' {
 			return None;
 		}
@@ -245,6 +263,7 @@ fn find_regex_closing_delimiter(body: &str) -> Option<usize> {
 
 fn parse_network_option(
 	raw: &str,
+	exception: bool,
 	options: &mut NetworkOptions,
 	line_number: usize,
 	source: &str,
@@ -254,10 +273,46 @@ fn parse_network_option(
 
 	match lower.as_str() {
 		"badfilter" => options.badfilter = true,
+		"document" if exception => {
+			options.document = true;
+			options.unsupported.push(raw.to_owned());
+		}
+		"elemhide" if exception => {
+			options.elemhide = true;
+			options.unsupported.push(raw.to_owned());
+		}
+		"generichide" if exception => {
+			options.generichide = true;
+			options.unsupported.push(raw.to_owned());
+		}
+		"genericblock" if exception => {
+			options.genericblock = true;
+			options.unsupported.push(raw.to_owned());
+		}
+		// ABP defines these as exception-only modifiers. On blocking filters
+		// they have no effect, so they must not turn into request-type options.
+		"document" | "elemhide" | "generichide" | "genericblock" => {}
 		"third-party" => options.third_party = Some(true),
 		"~third-party" => options.third_party = Some(false),
 		"match-case" => options.match_case = true,
 		"important" => options.important = true,
+		_ if lower.starts_with("sitekey=") => {
+			let value = &raw["sitekey=".len()..];
+			let sitekeys: Vec<_> = value.split('|').map(str::trim).collect();
+			if sitekeys.iter().any(|sitekey| sitekey.is_empty()) {
+				options.unsupported.push(raw.to_owned());
+				diagnostics.push(Diagnostic {
+					line: line_number,
+					level: DiagnosticLevel::Error,
+					message: "The sitekey option must contain non-empty keys".into(),
+					source: source.into(),
+				});
+			} else {
+				options
+					.sitekeys
+					.extend(sitekeys.into_iter().map(str::to_owned));
+			}
+		}
 		_ if lower.starts_with("domain=") => {
 			match parse_domain_list(&raw["domain=".len()..]) {
 				Ok(domains) if !domains.is_empty() => options.domains.extend(domains),
@@ -316,7 +371,6 @@ fn parse_resource_type_option(option: &str) -> Option<ResourceType> {
 		"object" | "object-subrequest" => Some(ResourceType::Object),
 		"xmlhttprequest" => Some(ResourceType::XmlHttpRequest),
 		"subdocument" => Some(ResourceType::SubFrame),
-		"document" => Some(ResourceType::MainFrame),
 		"font" => Some(ResourceType::Font),
 		"media" => Some(ResourceType::Media),
 		"ping" => Some(ResourceType::Ping),
@@ -611,5 +665,119 @@ mod tests {
 				.unsupported
 				.contains(&"generichide".to_owned())
 		);
+	}
+
+	#[test]
+	fn parses_page_scope_exception_modifiers_without_treating_document_as_a_type()
+	{
+		let result = parse_filter_list(
+			"@@||example.com^$document,elemhide,generichide,genericblock",
+		);
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network exception");
+		};
+
+		assert!(filter.exception);
+		assert!(filter.options.document);
+		assert!(filter.options.elemhide);
+		assert!(filter.options.generichide);
+		assert!(filter.options.genericblock);
+		assert!(filter.options.resource_types.is_empty());
+		assert_eq!(
+			filter
+				.options
+				.unsupported
+				.iter()
+				.map(String::as_str)
+				.collect::<Vec<_>>(),
+			vec!["document", "elemhide", "generichide", "genericblock"]
+		);
+		assert!(result.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn ignores_exception_only_modifiers_on_blocking_filters() {
+		let result = parse_filter_list(
+			"||ads.example^$document,elemhide,generichide,genericblock",
+		);
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network filter");
+		};
+
+		assert!(!filter.exception);
+		assert!(!filter.options.document);
+		assert!(!filter.options.elemhide);
+		assert!(!filter.options.generichide);
+		assert!(!filter.options.genericblock);
+		assert!(filter.options.unsupported.is_empty());
+		assert!(result.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn parses_sitekey_values_but_keeps_the_scope_unsupported_for_compilation() {
+		let result = parse_filter_list("||ads.example^$sitekey=firstKey|secondKey");
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network filter");
+		};
+
+		assert_eq!(
+			filter
+				.options
+				.sitekeys
+				.iter()
+				.map(String::as_str)
+				.collect::<Vec<_>>(),
+			vec!["firstKey", "secondKey"]
+		);
+		assert!(filter.options.unsupported.is_empty());
+		assert!(result.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn rejects_empty_sitekey_values() {
+		let result = parse_filter_list("||ads.example^$sitekey=firstKey|");
+
+		assert_eq!(result.diagnostics.len(), 1);
+		assert_eq!(result.diagnostics[0].level, DiagnosticLevel::Error);
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network filter");
+		};
+		assert_eq!(
+			filter
+				.options
+				.unsupported
+				.iter()
+				.map(String::as_str)
+				.collect::<Vec<_>>(),
+			vec!["sitekey=firstKey|"]
+		);
+	}
+
+	#[test]
+	fn does_not_parse_extended_cosmetic_or_snippet_rules_as_network_filters() {
+		let result = parse_filter_list(
+			"example.com#?#div:has-text(ad)\n\
+			example.com#@?#div:has-text(ad)\n\
+			example.com#$#hide-if-contains ad div\n\
+			example.com#@$#hide-if-contains ad div",
+		);
+
+		assert!(result.filters.is_empty());
+		assert_eq!(result.diagnostics.len(), 4);
+		assert!(
+			result
+				.diagnostics
+				.iter()
+				.all(|item| { item.level == DiagnosticLevel::Warning })
+		);
+	}
+
+	#[test]
+	fn option_values_may_contain_dollar_characters() {
+		let (pattern, options) =
+			split_pattern_and_options("||ads.example^$csp=script-src '$value'");
+
+		assert_eq!(pattern, "||ads.example^");
+		assert_eq!(options, Some("csp=script-src '$value'"));
 	}
 }
