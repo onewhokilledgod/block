@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Rust, WASM and extension checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked --version 0.15.1
+
+      - name: Run extension tests
+        run: npm run test:extension
+
+      - name: Run Rust tests
+        run: npm run test:rust
+
+      - name: Check Rust formatting
+        run: npm run fmt:rust
+
+      - name: Run Clippy
+        run: npm run lint:rust
+
+      - name: Build WASM and browser extension
+        run: npm run build
