@@ -11,7 +11,9 @@ import type {
 import type {
 	DeclarativeNetRequestApi,
 	DynamicRulesUpdate,
-	ExistingDynamicRule
+	ExistingDynamicRule,
+	RegexOptions,
+	RegexSupportResult
 } from "./browser-api.js";
 
 import { DnrRulesManager } from "./rules-manager.js";
@@ -29,24 +31,44 @@ function createRule(id: number): DnrRule {
 	};
 }
 
-function createReport(id: number): CompileReport {
+function createRegexRule(
+	id: number,
+	regexFilter: string,
+	isCaseSensitive = false
+): DnrRule {
 	return {
-		rules: [createRule(id)],
+		id,
+		priority: 100,
+		action: { type: "block" },
+		condition: {
+			regexFilter,
+			isUrlFilterCaseSensitive: isCaseSensitive,
+			resourceTypes: ["script"]
+		}
+	};
+}
+
+function createReport(
+	id: number,
+	rules: DnrRule[] = [createRule(id)]
+): CompileReport {
+	return {
+		rules,
 		parserDiagnostics: [],
 		compilerDiagnostics: [],
 		parserStats: {
-			totalFilters: 1,
-			networkFilters: 1,
+			totalFilters: rules.length,
+			networkFilters: rules.length,
 			cosmeticFilters: 0,
 			errors: 0,
 			warnings: 0
 		},
 		compilerStats: {
-			networkFiltersSeen: 1,
-			compiledRules: 1,
+			networkFiltersSeen: rules.length,
+			compiledRules: rules.length,
 			skippedNetworkFilters: 0,
 			cosmeticFiltersDeferred: 0,
-			regexRules: 0
+			regexRules: rules.filter(rule => rule.condition.regexFilter !== undefined).length
 		}
 	};
 }
@@ -80,6 +102,12 @@ function createMockRulesApi() {
 	let currentRules: ExistingDynamicRule[] = [];
 
 	const updates: DynamicRulesUpdate[] = [];
+	const isRegexSupported = vi.fn(
+		async (_options: RegexOptions): Promise<RegexSupportResult> => ({
+			isSupported: true
+		})
+	);
+
 
 	const api: DeclarativeNetRequestApi = {
 		getDynamicRules: async () => currentRules.map(({ id }) => ({ id })),
@@ -95,12 +123,14 @@ function createMockRulesApi() {
 				...remaining,
 				...update.addRules.map(({ id }) => ({ id }))
 			];
-		}
+		},
+		isRegexSupported
 	};
 
 	return {
 		api,
 		updates,
+		isRegexSupported,
 		getCurrentIds: () => currentRules.map(({ id }) => id)
 	};
 }
@@ -219,5 +249,137 @@ describe("FilterEngineManager", () => {
 		).rejects.toThrow("outside its allocated ID range");
 
 		expect(mockApi.updates).toHaveLength(0);
+	});
+	it("checks regex rules with the browser and skips unsupported expressions", async () => {
+		const { engine, compileFilterList } = createEngine();
+		const mockApi = createMockRulesApi();
+		const supportedRegex = "^https?://ads\\.example/";
+		const unsupportedRegex = "^https?://tracker\\.example/";
+
+		compileFilterList.mockImplementation((_input, options) => {
+			const firstRuleId = options?.firstRuleId ?? 1;
+			const regex = firstRuleId === 1 ? supportedRegex : unsupportedRegex;
+			return createReport(firstRuleId, [
+				createRule(firstRuleId),
+				createRegexRule(firstRuleId + 1, regex, firstRuleId !== 1)
+			]);
+		});
+
+		mockApi.isRegexSupported.mockImplementation(async ({ regex }) =>
+			regex === supportedRegex
+				? { isSupported: true }
+				: { isSupported: false, reason: "syntaxError" }
+		);
+
+		const manager = new FilterEngineManager(
+			engine,
+			new DnrRulesManager(mockApi.api)
+		);
+
+		const result = await manager.applyFilterLists([
+			{ id: "easylist", content: "easylist content" },
+			{ id: "easyprivacy", content: "easyprivacy content" }
+		]);
+
+		expect(mockApi.isRegexSupported).toHaveBeenNthCalledWith(1, {
+			regex: supportedRegex,
+			isCaseSensitive: false,
+			requireCapturing: false
+		});
+		expect(mockApi.isRegexSupported).toHaveBeenNthCalledWith(2, {
+			regex: unsupportedRegex,
+			isCaseSensitive: true,
+			requireCapturing: false
+		});
+		expect(result.report.rules.map(rule => rule.id)).toEqual([1, 2, 3501]);
+		expect(result.report.compilerStats).toMatchObject({
+			compiledRules: 3,
+			skippedNetworkFilters: 1,
+			regexRules: 1
+		});
+		expect(result.report.compilerDiagnostics).toContainEqual(
+			expect.objectContaining({
+				line: 0,
+				level: "warning",
+				code: "unsupportedRegex",
+				pattern: unsupportedRegex
+			})
+		);
+		expect(mockApi.updates[0]?.addRules.map(rule => rule.id)).toEqual([
+			1, 2, 3501
+		]);
+	});
+
+	it("checks duplicate regex patterns only once per case-sensitivity mode", async () => {
+		const { engine, compileFilterList } = createEngine();
+		const mockApi = createMockRulesApi();
+		const regex = "^https?://ads\\.example/";
+
+		compileFilterList.mockReturnValue(
+			createReport(1, [
+				createRegexRule(1, regex),
+				createRegexRule(2, regex)
+			])
+		);
+
+		const manager = new FilterEngineManager(
+			engine,
+			new DnrRulesManager(mockApi.api)
+		);
+		const result = await manager.applyFilterList("regex list");
+
+		expect(mockApi.isRegexSupported).toHaveBeenCalledTimes(1);
+		expect(result.report.rules).toHaveLength(2);
+		expect(result.report.compilerStats.regexRules).toBe(2);
+	});
+
+	it("preserves existing DNR rules when browser regex validation fails", async () => {
+		const { engine, compileFilterList } = createEngine();
+		const mockApi = createMockRulesApi();
+
+		compileFilterList.mockReturnValue(
+			createReport(1, [createRegexRule(1, "^https?://ads\\.example/")])
+		);
+		mockApi.isRegexSupported.mockRejectedValueOnce(
+			new Error("Browser API unavailable")
+		);
+
+		const manager = new FilterEngineManager(
+			engine,
+			new DnrRulesManager(mockApi.api)
+		);
+
+		await expect(manager.applyFilterList("regex list")).rejects.toThrow(
+			"Filter lists contain compilation errors"
+		);
+		expect(mockApi.updates).toHaveLength(0);
+	});
+
+	it("does not install more than 1000 regex rules", async () => {
+		const { engine, compileFilterList } = createEngine();
+		const mockApi = createMockRulesApi();
+		const regexRules = Array.from({ length: 1001 }, (_, index) =>
+			createRegexRule(
+				index + 1,
+				`^https?://ads-${index}\\.example/`
+			)
+		);
+
+		compileFilterList.mockReturnValue(createReport(1, regexRules));
+
+		const manager = new FilterEngineManager(
+			engine,
+			new DnrRulesManager(mockApi.api)
+		);
+		const result = await manager.applyFilterList("large regex list");
+
+		expect(mockApi.isRegexSupported).toHaveBeenCalledTimes(1000);
+		expect(result.report.rules).toHaveLength(1000);
+		expect(result.report.compilerStats).toMatchObject({
+			compiledRules: 1000,
+			skippedNetworkFilters: 1,
+			regexRules: 1000
+		});
+		expect(mockApi.getCurrentIds()).toHaveLength(1000);
 	});
 });

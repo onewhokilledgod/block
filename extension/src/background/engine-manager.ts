@@ -1,4 +1,10 @@
-import type { CompileReport, FilterEngine } from "../shared/filter-engine.js";
+import type {
+	CompilerDiagnostic,
+	CompileReport,
+	DnrRule,
+	FilterEngine
+} from "../shared/filter-engine.js";
+import type { RegexSupportResult } from "./browser-api.js";
 export type { CompileReport };
 
 import {
@@ -108,6 +114,10 @@ function combineReports(
 	};
 }
 
+const MAX_DNR_REGEX_RULES = 1_000;
+const REGEX_CHECK_BATCH_SIZE = 16;
+
+
 export class FilterEngineManager {
 	constructor(
 		private readonly engine: FilterEngine,
@@ -131,17 +141,25 @@ export class FilterEngineManager {
 		});
 
 		this.validateReport(report);
+		const validatedReport = await this.validateRegexRules(
+			report,
+			MAX_DNR_REGEX_RULES,
+			new Map()
+		);
+		this.validateReport(validatedReport);
 
-		if (report.rules.length === 0) {
+		if (validatedReport.rules.length === 0) {
 			throw new FilterApplicationError(
 				"Filter list produced no supported network rules.",
-				report
+				validatedReport
 			);
 		}
 
-		const update = await this.rulesManager.replaceManagedRules(report.rules);
+		const update = await this.rulesManager.replaceManagedRules(
+			validatedReport.rules
+		);
 
-		return { report, update };
+		return { report: validatedReport, update };
 	}
 
 	/**
@@ -244,8 +262,33 @@ export class FilterEngineManager {
 			});
 		}
 
-		const combinedReport = combineReports(compilations);
+		const compiledReport = combineReports(compilations);
+		this.validateReport(compiledReport);
 
+		const regexSupportCache = new Map<string, RegexSupportResult>();
+		let remainingRegexRuleQuota = MAX_DNR_REGEX_RULES;
+
+		for (let index = 0; index < compilations.length; index += 1) {
+			const compilation = compilations[index]!;
+			const report = await this.validateRegexRules(
+				compilation.report,
+				remainingRegexRuleQuota,
+				regexSupportCache
+			);
+
+			compilations[index] = { ...compilation, report };
+			remainingRegexRuleQuota -= report.compilerStats.regexRules;
+
+			if (
+				report.compilerDiagnostics.some(
+					diagnostic => diagnostic.level === "error"
+				)
+			) {
+				break;
+			}
+		}
+
+		const combinedReport = combineReports(compilations);
 		this.validateReport(combinedReport);
 
 		if (combinedReport.rules.length === 0) {
@@ -263,6 +306,161 @@ export class FilterEngineManager {
 			lists: compilations,
 			report: combinedReport,
 			update
+		};
+	}
+
+	/**
+	 * Validates compiled regex rules with the browser before DNR installation.
+	 * Checks are deduplicated and bounded to avoid unbounded browser API work.
+	 */
+	private async validateRegexRules(
+		report: CompileReport,
+		remainingRegexRuleQuota: number,
+		cache: Map<string, RegexSupportResult>
+	): Promise<CompileReport> {
+		const regexChecks = new Map<
+			string,
+			{ regex: string; isCaseSensitive: boolean }
+		>();
+		const keyByRuleId = new Map<number, string>();
+		const quotaSkippedRuleIds = new Set<number>();
+
+		for (const rule of report.rules) {
+			const regex = rule.condition.regexFilter;
+			if (regex === undefined) {
+				continue;
+			}
+
+			if (keyByRuleId.size >= remainingRegexRuleQuota) {
+				quotaSkippedRuleIds.add(rule.id);
+				continue;
+			}
+
+			const isCaseSensitive =
+				rule.condition.isUrlFilterCaseSensitive ?? false;
+			const key = JSON.stringify([regex, isCaseSensitive]);
+			keyByRuleId.set(rule.id, key);
+			if (!cache.has(key)) {
+				regexChecks.set(key, { regex, isCaseSensitive });
+			}
+		}
+
+		const checks = Array.from(regexChecks.entries());
+		for (
+			let offset = 0;
+			offset < checks.length;
+			offset += REGEX_CHECK_BATCH_SIZE
+		) {
+			const batch = checks.slice(offset, offset + REGEX_CHECK_BATCH_SIZE);
+			const outcomes = await Promise.all(
+				batch.map(async ([key, check]) => {
+					try {
+						return {
+							key,
+							result: await this.rulesManager.isRegexSupported(
+								check.regex,
+								check.isCaseSensitive
+							)
+						};
+					} catch (error: unknown) {
+						return { key, error };
+					}
+				})
+			);
+
+			const failed = outcomes.find(outcome => "error" in outcome);
+			if (failed && "error" in failed) {
+				const check = regexChecks.get(failed.key)!;
+				const message =
+					failed.error instanceof Error
+						? failed.error.message
+						: String(failed.error);
+
+				return {
+					...report,
+					compilerDiagnostics: [
+						...report.compilerDiagnostics,
+						{
+							line: 0,
+							level: "error",
+							code: "unsupportedRegex",
+							message: `Browser regex validation failed: ${message}`,
+							pattern: check.regex
+						}
+					]
+				};
+			}
+
+			for (const outcome of outcomes) {
+				if ("result" in outcome && outcome.result !== undefined) {
+					cache.set(outcome.key, outcome.result);
+				}
+			}
+		}
+
+		const rules: DnrRule[] = [];
+		const diagnostics: CompilerDiagnostic[] = [];
+		let skippedRegexCount = 0;
+		let installedRegexCount = 0;
+
+		for (const rule of report.rules) {
+			const regex = rule.condition.regexFilter;
+			if (regex === undefined) {
+				rules.push(rule);
+				continue;
+			}
+
+			if (quotaSkippedRuleIds.has(rule.id)) {
+				skippedRegexCount += 1;
+				diagnostics.push({
+					line: 0,
+					level: "warning",
+					code: "unsupportedRegex",
+					message:
+						`The cross-browser regex rule limit (${MAX_DNR_REGEX_RULES}) ` +
+						"has been reached; this rule was skipped.",
+					pattern: regex
+				});
+				continue;
+			}
+
+			const key = keyByRuleId.get(rule.id);
+			const result = key ? cache.get(key) : undefined;
+			if (result?.isSupported) {
+				rules.push(rule);
+				installedRegexCount += 1;
+				continue;
+			}
+
+			skippedRegexCount += 1;
+			diagnostics.push({
+				line: 0,
+				level: "warning",
+				code: "unsupportedRegex",
+				message: result?.reason
+					? `The browser rejected this regexFilter: ${result.reason}.`
+					: "The browser rejected this regexFilter.",
+				pattern: regex
+			});
+		}
+
+		return {
+			...report,
+			rules,
+			compilerDiagnostics: [
+				...report.compilerDiagnostics,
+				...diagnostics
+			],
+			compilerStats: {
+				...report.compilerStats,
+				compiledRules: Math.max(
+					0,
+					report.compilerStats.compiledRules - skippedRegexCount
+				),
+				skippedNetworkFilters:
+					report.compilerStats.skippedNetworkFilters + skippedRegexCount,
+				regexRules: installedRegexCount
+			}
 		};
 	}
 
