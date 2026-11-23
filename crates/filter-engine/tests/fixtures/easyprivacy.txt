@@ -1,0 +1,13 @@
+[Adblock Plus 1.1]
+! The EasyList authors. Pinned source: 003c3a9e0e650dad7ee409246920fbc0d4c079a6 (2026-11-23).
+! Source: https://easylist.to/easylist/easyprivacy.txt
+&&sub19=undefined&sub20=undefined
+&action=js_stats
+&http_referer=$script,xmlhttprequest,domain=~biletomat.pl|~facebook.com|~jobscore.com
+$csp=child-src 'none'; frame-src 'self' *; worker-src 'none',domain=fileone.tv|theappguruz.com
+||void.nicopr.fr/rec$method=POST
+nicovideo.jp##+js(no-fetch-if, stella)
+||googletagmanager.com/gtag/js$important,redirect=googletagmanager_gtm.js,script,xmlhttprequest,domain=redstoneonline.jp
+||clarity.ms/tag/$important,script,domain=phileweb.com
+||googletagmanager.com/gtm.js$important,domain=mustar.meitetsu.co.jp
+@@||google-analytics.com/analytics.js$redirect-rule,script,domain=mond.how

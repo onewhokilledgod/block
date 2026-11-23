@@ -1,0 +1,10 @@
+[Adblock Plus 2.0]
+! The EasyList authors. Pinned source: 06aab8654f212b6a2f78efb80abd631ff4d398ca (2026-11-23).
+! Source: https://easylist.to/easylist/easylist.txt
+&subaffid=%$subdocument,third-party
+-ad-manager/$~stylesheet
+-ads/assets/$script,domain=~web-ads.org
+/ad/images/*$image,domain=~studiocalling.it
+/ad_counter.aspx$ping
+ulta.com#?#li.ProductListingResults__productCard:has(.ProductCard__badge:has-text(Sponsored))
+6abc.com,abc11.com,abc13.com,abc30.com,abc7.com,abc7chicago.com,abc7news.com,abc7ny.com,abcotvs.net##.nav.sticky {top:0px;}
