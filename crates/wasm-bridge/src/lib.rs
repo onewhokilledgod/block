@@ -122,6 +122,7 @@ enum ParsedFilterDto {
 struct NetworkOptionsDto {
 	domains: Vec<DomainRestrictionDto>,
 	resource_types: Vec<ResourceTypeDto>,
+	excluded_resource_types: Vec<ResourceTypeDto>,
 	third_party: Option<bool>,
 	match_case: bool,
 	important: bool,
@@ -314,6 +315,12 @@ fn to_filter_dto(filter: &Filter) -> ParsedFilterDto {
 					.iter()
 					.map(to_resource_type_dto)
 					.collect(),
+				excluded_resource_types: filter
+					.options
+					.excluded_resource_types
+					.iter()
+					.map(to_resource_type_dto)
+					.collect(),
 				third_party: filter.options.third_party,
 				match_case: filter.options.match_case,
 				important: filter.options.important,
@@ -395,12 +402,16 @@ mod tests {
 	#[test]
 	fn parse_report_contains_typed_filters_and_parser_diagnostics() {
 		let report = build_parse_report(
-			"||ads.example^$script\nexample.com##.ad\nexample.com##",
+			"||ads.example^$script,~image\nexample.com##.ad\nexample.com##",
 		);
 		let value = serde_json::to_value(report).expect("parse report serializes");
 
 		assert_eq!(value["filters"][0]["kind"], "network");
 		assert_eq!(value["filters"][0]["options"]["resourceTypes"][0], "script");
+		assert_eq!(
+			value["filters"][0]["options"]["excludedResourceTypes"][0],
+			"image"
+		);
 		assert_eq!(value["filters"][1]["kind"], "cosmetic");
 		assert_eq!(value["diagnostics"][0]["level"], "error");
 		assert_eq!(value["stats"]["totalFilters"], 2);

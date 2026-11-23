@@ -385,26 +385,8 @@ fn compile_network_filter(
 	let (initiator_domains, excluded_initiator_domains) =
 		compile_domains(&filter.options.domains)?;
 
-	let resource_types = if filter.options.resource_types.is_empty() {
-		// DNR's implicit resource-type set excludes main_frame. Emit an
-		// explicit common set so unqualified ABP filters can also match page
-		// navigations. Newer vendor-specific types can be added by a browser
-		// capability profile later.
-		vec![
-			DnrResourceType::MainFrame,
-			DnrResourceType::SubFrame,
-			DnrResourceType::Stylesheet,
-			DnrResourceType::Script,
-			DnrResourceType::Image,
-			DnrResourceType::Font,
-			DnrResourceType::Object,
-			DnrResourceType::XmlHttpRequest,
-			DnrResourceType::Ping,
-			DnrResourceType::CspReport,
-			DnrResourceType::Media,
-			DnrResourceType::WebSocket,
-			DnrResourceType::Other,
-		]
+	let mut resource_types = if filter.options.resource_types.is_empty() {
+		all_dnr_resource_types()
 	} else {
 		let mut result = Vec::new();
 		for resource_type in &filter.options.resource_types {
@@ -415,6 +397,17 @@ fn compile_network_filter(
 		}
 		result
 	};
+	for resource_type in &filter.options.excluded_resource_types {
+		let excluded = map_resource_type(*resource_type);
+		resource_types.retain(|included| *included != excluded);
+	}
+
+	if resource_types.is_empty() {
+		return Err((
+			CompileDiagnosticCode::UnsupportedOption,
+			"Resource-type exclusions remove every included DNR request type".into(),
+		));
+	}
 
 	let priority = if filter.exception {
 		PRIORITY_EXCEPTION
@@ -551,6 +544,27 @@ fn map_resource_type(resource_type: ResourceType) -> DnrResourceType {
 	}
 }
 
+/// Explicit baseline used for unqualified filters and filters with only
+/// negated resource-type options. This includes `main_frame`, which DNR omits
+/// from its implicit resource-type set.
+fn all_dnr_resource_types() -> Vec<DnrResourceType> {
+	vec![
+		DnrResourceType::MainFrame,
+		DnrResourceType::SubFrame,
+		DnrResourceType::Stylesheet,
+		DnrResourceType::Script,
+		DnrResourceType::Image,
+		DnrResourceType::Font,
+		DnrResourceType::Object,
+		DnrResourceType::XmlHttpRequest,
+		DnrResourceType::Ping,
+		DnrResourceType::CspReport,
+		DnrResourceType::Media,
+		DnrResourceType::WebSocket,
+		DnrResourceType::Other,
+	]
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -619,6 +633,41 @@ mod tests {
 		);
 		assert_eq!(condition.domain_type, Some(DnrDomainType::ThirdParty));
 		assert_eq!(condition.resource_types, vec![DnrResourceType::Script]);
+	}
+
+	#[test]
+	fn compiles_negated_resource_type_options_as_an_explicit_complement() {
+		let report = compile("||ads.example^$~image,~script");
+		let resource_types = &report.rules[0].condition.resource_types;
+
+		assert_eq!(resource_types.len(), 11);
+		assert!(resource_types.contains(&DnrResourceType::MainFrame));
+		assert!(resource_types.contains(&DnrResourceType::CspReport));
+		assert!(!resource_types.contains(&DnrResourceType::Image));
+		assert!(!resource_types.contains(&DnrResourceType::Script));
+		assert!(report.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn applies_resource_type_exclusions_after_inclusions() {
+		let report = compile("||ads.example^$script,image,~image");
+
+		assert_eq!(
+			report.rules[0].condition.resource_types,
+			vec![DnrResourceType::Script]
+		);
+	}
+
+	#[test]
+	fn skips_rules_with_no_resource_types_after_exclusion() {
+		let report = compile("||ads.example^$script,~script");
+
+		assert!(report.rules.is_empty());
+		assert_eq!(report.stats.skipped_network_filters, 1);
+		assert_eq!(
+			report.diagnostics[0].code,
+			CompileDiagnosticCode::UnsupportedOption
+		);
 	}
 
 	#[test]

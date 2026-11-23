@@ -257,22 +257,6 @@ fn parse_network_option(
 		"~third-party" => options.third_party = Some(false),
 		"match-case" => options.match_case = true,
 		"important" => options.important = true,
-		"script" => options.resource_types.push(ResourceType::Script),
-		"image" => options.resource_types.push(ResourceType::Image),
-		"stylesheet" => options.resource_types.push(ResourceType::Stylesheet),
-		"object" | "object-subrequest" => {
-			options.resource_types.push(ResourceType::Object)
-		}
-		"xmlhttprequest" => {
-			options.resource_types.push(ResourceType::XmlHttpRequest)
-		}
-		"subdocument" => options.resource_types.push(ResourceType::SubFrame),
-		"document" => options.resource_types.push(ResourceType::MainFrame),
-		"font" => options.resource_types.push(ResourceType::Font),
-		"media" => options.resource_types.push(ResourceType::Media),
-		"ping" => options.resource_types.push(ResourceType::Ping),
-		"websocket" => options.resource_types.push(ResourceType::WebSocket),
-		"other" => options.resource_types.push(ResourceType::Other),
 		_ if lower.starts_with("domain=") => {
 			match parse_domain_list(&raw["domain=".len()..]) {
 				Ok(domains) if !domains.is_empty() => options.domains.extend(domains),
@@ -299,9 +283,45 @@ fn parse_network_option(
 				}
 			}
 		}
-		// These are valid ABP concepts, but need dedicated compilation paths.
-		// Preserve them instead of silently dropping semantic information.
-		_ => options.unsupported.push(raw.to_owned()),
+		_ => {
+			let (resource_type_name, excluded) = match lower.strip_prefix('~') {
+				Some(name) => (name, true),
+				None => (lower.as_str(), false),
+			};
+
+			if let Some(resource_type) =
+				parse_resource_type_option(resource_type_name)
+			{
+				let target = if excluded {
+					&mut options.excluded_resource_types
+				} else {
+					&mut options.resource_types
+				};
+				target.push(resource_type);
+			} else {
+				// Preserve unsupported ABP concepts instead of silently dropping
+				// semantic information.
+				options.unsupported.push(raw.to_owned());
+			}
+		}
+	}
+}
+
+fn parse_resource_type_option(option: &str) -> Option<ResourceType> {
+	match option {
+		"script" => Some(ResourceType::Script),
+		"image" => Some(ResourceType::Image),
+		"stylesheet" => Some(ResourceType::Stylesheet),
+		"object" | "object-subrequest" => Some(ResourceType::Object),
+		"xmlhttprequest" => Some(ResourceType::XmlHttpRequest),
+		"subdocument" => Some(ResourceType::SubFrame),
+		"document" => Some(ResourceType::MainFrame),
+		"font" => Some(ResourceType::Font),
+		"media" => Some(ResourceType::Media),
+		"ping" => Some(ResourceType::Ping),
+		"websocket" => Some(ResourceType::WebSocket),
+		"other" => Some(ResourceType::Other),
+		_ => None,
 	}
 }
 
@@ -403,6 +423,34 @@ mod tests {
 		assert_eq!(filter.options.domains.len(), 2);
 		assert!(filter.options.domains[0].include);
 		assert!(!filter.options.domains[1].include);
+		assert!(result.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn parses_negated_resource_type_options() {
+		let result = parse_filter_list(
+			"||ads.example^$~image,~script\n||mixed.example^$script,image,~image",
+		);
+		let Filter::Network(negated) = &result.filters[0] else {
+			panic!("expected network filter");
+		};
+		let Filter::Network(mixed) = &result.filters[1] else {
+			panic!("expected network filter");
+		};
+
+		assert!(negated.options.resource_types.is_empty());
+		assert_eq!(
+			negated.options.excluded_resource_types,
+			vec![ResourceType::Image, ResourceType::Script]
+		);
+		assert_eq!(
+			mixed.options.resource_types,
+			vec![ResourceType::Script, ResourceType::Image]
+		);
+		assert_eq!(
+			mixed.options.excluded_resource_types,
+			vec![ResourceType::Image]
+		);
 		assert!(result.diagnostics.is_empty());
 	}
 

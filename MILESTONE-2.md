@@ -4,8 +4,8 @@
 
 `filter-engine` can now compile the supported network-filter subset into
 `declarativeNetRequest` JSON objects. The compiler is browser-independent and
-has no WebExtension dependencies; the TypeScript adapter will install these
-rules in a later milestone.
+has no WebExtension dependencies; the TypeScript adapter validates and installs
+these rules through the browser's DNR API.
 
 ### Supported in this milestone
 
@@ -15,8 +15,11 @@ rules in a later milestone.
 - `$domain=` inclusion and exclusion lists, mapped to
   `initiatorDomains` / `excludedInitiatorDomains`.
 - `$third-party` and `~third-party`, mapped to `domainType`.
-- Parsed resource types and `$match-case`; unqualified filters get an explicit
-  common DNR resource-type set including top-level navigations.
+- Positive and negated resource-type options such as `$script` and `$~image`;
+  negations are compiled to an explicit DNR resource-type set. `$match-case`
+  is also supported.
+- Unqualified filters get an explicit common DNR resource-type set including
+  top-level navigations.
 - Configurable rule quotas and deterministic positive rule IDs.
 - ABP regular-expression filters are emitted as DNR `regexFilter` candidates; the browser adapter validates each expression with `isRegexSupported()` before installation.
 - Separate regex-rule quotas and diagnostics for expressions that cannot be represented safely.

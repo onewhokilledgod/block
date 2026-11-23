@@ -22,6 +22,7 @@ export interface DomainRestriction {
 export interface NetworkOptions {
 	domains: DomainRestriction[];
 	resourceTypes: ParsedResourceType[];
+	excludedResourceTypes: ParsedResourceType[];
 	thirdParty: boolean | null;
 	matchCase: boolean;
 	important: boolean;

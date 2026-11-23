@@ -21,6 +21,8 @@ pub struct NetworkFilter {
 pub struct NetworkOptions {
 	pub domains: Vec<DomainRestriction>,
 	pub resource_types: Vec<ResourceType>,
+	/// Request types excluded by negated ABP options such as `$~image`.
+	pub excluded_resource_types: Vec<ResourceType>,
 	/// `Some(true)` means third-party only; `Some(false)` means first-party only.
 	pub third_party: Option<bool>,
 	pub match_case: bool,
