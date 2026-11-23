@@ -569,15 +569,19 @@ fn compile_domains(
 	let mut excluded = Vec::new();
 
 	for restriction in domains {
-		if !is_dnr_domain(&restriction.domain) {
-			return Err((
-				CompileDiagnosticCode::UnsupportedDomain,
-				format!(
-					"Domain '{}' cannot be represented as an ASCII DNR initiator domain; use punycode and a valid hostname",
-					restriction.domain
-				),
-			));
-		}
+		// Normalize like browser URL hosts, then enforce the DNR hostname subset.
+		let normalized_domain = idna::domain_to_ascii(&restriction.domain)
+			.ok()
+			.filter(|domain| is_dnr_domain(domain))
+			.ok_or_else(|| {
+				(
+					CompileDiagnosticCode::UnsupportedDomain,
+					format!(
+						"Domain '{}' cannot be normalized to a valid ASCII DNR hostname",
+						restriction.domain
+					),
+				)
+			})?;
 
 		let target = if restriction.include {
 			&mut included
@@ -585,8 +589,8 @@ fn compile_domains(
 			&mut excluded
 		};
 
-		if !target.contains(&restriction.domain) {
-			target.push(restriction.domain.clone());
+		if !target.contains(&normalized_domain) {
+			target.push(normalized_domain);
 		}
 	}
 
@@ -923,8 +927,33 @@ mod tests {
 	}
 
 	#[test]
-	fn unicode_domains_are_rejected_until_punycode_conversion_exists() {
-		let report = compile("||tracker.example^$domain=café.example");
+	fn compiles_unicode_domains_to_punycode_and_deduplicates_equivalent_forms() {
+		let report = compile(
+			"||tracker.example^$domain=BÜCHER.example|xn--bcher-kva.example|~café.example",
+		);
+		assert_eq!(report.rules.len(), 1);
+
+		let condition = &report.rules[0].condition;
+		assert_eq!(
+			condition
+				.initiator_domains
+				.as_ref()
+				.expect("included domains"),
+			&vec!["xn--bcher-kva.example".to_owned()]
+		);
+		assert_eq!(
+			condition
+				.excluded_initiator_domains
+				.as_ref()
+				.expect("excluded domains"),
+			&vec!["xn--caf-dma.example".to_owned()]
+		);
+		assert!(report.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn rejects_disallowed_unicode_domain_labels() {
+		let report = compile("||tracker.example^$domain=bad\u{0000}label.example");
 
 		assert!(report.rules.is_empty());
 		assert_eq!(

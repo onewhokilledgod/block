@@ -13,7 +13,8 @@ these rules through the browser's DNR API.
 - Blocking rules and `@@` allow/exception rules.
 - `$important` blocking rules.
 - `$domain=` inclusion and exclusion lists, mapped to
-  `initiatorDomains` / `excludedInitiatorDomains`.
+  `initiatorDomains` / `excludedInitiatorDomains`; Unicode domains are
+  normalized to ASCII/Punycode with IDNA before DNR emission.
 - `$third-party` and `~third-party`, mapped to `domainType`.
 - Positive and negated resource-type options such as `$script` and `$~image`;
   negations are compiled to an explicit DNR resource-type set. `$match-case`
@@ -32,8 +33,6 @@ these rules through the browser's DNR API.
   A filter containing any unrecognized option is skipped as a whole.
 - Cosmetic filters. They are counted as deferred for the separate cosmetic
   engine and are not turned into network rules.
-- IDN-to-punycode conversion. Domain restrictions containing non-ASCII
-  characters are skipped until an IDNA implementation is added.
 
 ## Rule precedence
 
