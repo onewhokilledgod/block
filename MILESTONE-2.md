@@ -14,7 +14,8 @@ these rules through the browser's DNR API.
 - `$important` blocking rules.
 - `$domain=` inclusion and exclusion lists, mapped to
   `initiatorDomains` / `excludedInitiatorDomains`; Unicode domains are
-  normalized to ASCII/Punycode with IDNA before DNR emission.
+  normalized to ASCII/Punycode with IDNA before DNR emission. Labels longer
+  than 63 octets and hostnames longer than 253 ASCII octets are rejected.
 - `$third-party` and `~third-party`, mapped to `domainType`.
 - Positive and negated resource-type options such as `$script` and `$~image`;
   negations are compiled to an explicit DNR resource-type set. `$match-case`

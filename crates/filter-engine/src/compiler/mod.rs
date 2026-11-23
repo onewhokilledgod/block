@@ -602,6 +602,7 @@ fn compile_domains(
 
 fn is_dnr_domain(domain: &str) -> bool {
 	if domain.is_empty()
+		|| domain.len() > 253
 		|| !domain.is_ascii()
 		|| domain.starts_with('.')
 		|| domain.ends_with('.')
@@ -611,6 +612,7 @@ fn is_dnr_domain(domain: &str) -> bool {
 
 	domain.split('.').all(|label| {
 		!label.is_empty()
+			&& label.len() <= 63
 			&& !label.starts_with('-')
 			&& !label.ends_with('-')
 			&& label
@@ -960,6 +962,26 @@ mod tests {
 			report.diagnostics[0].code,
 			CompileDiagnosticCode::UnsupportedDomain
 		);
+	}
+
+	#[test]
+	fn rejects_dns_domains_exceeding_label_and_name_length_limits() {
+		let overlong_label = format!("{}.example", "a".repeat(64));
+		assert!(!is_dnr_domain(&overlong_label));
+
+		let label = "a".repeat(63);
+		let overlong_name = format!("{label}.{label}.{label}.{label}");
+		assert_eq!(overlong_name.len(), 255);
+		assert!(!is_dnr_domain(&overlong_name));
+
+		for domain in [&overlong_label, &overlong_name] {
+			let report = compile(&format!("||tracker.example^$domain={domain}"));
+			assert!(report.rules.is_empty());
+			assert_eq!(
+				report.diagnostics[0].code,
+				CompileDiagnosticCode::UnsupportedDomain
+			);
+		}
 	}
 
 	#[test]
