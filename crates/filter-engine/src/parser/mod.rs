@@ -236,7 +236,7 @@ fn find_regex_closing_delimiter(body: &str) -> Option<usize> {
 			'[' if !in_character_class => in_character_class = true,
 			']' if in_character_class => in_character_class = false,
 			'/' if !in_character_class => return Some(index),
-			_ => {},
+			_ => {}
 		}
 	}
 
