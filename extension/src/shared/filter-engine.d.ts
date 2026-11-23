@@ -69,6 +69,7 @@ export interface ParseReport {
 
 export interface CompileOptions {
 	maxRules?: number;
+	maxRegexRules?: number;
 	firstRuleId?: number;
 }
 
@@ -81,6 +82,7 @@ export type CompilerDiagnosticCode =
 	| "unsupportedImportantException"
 	| "invalidFirstRuleId"
 	| "ruleLimitExceeded"
+	| "regexRuleLimitExceeded"
 	| "ruleIdExhausted"
 	| "unsupportedRegex";
 

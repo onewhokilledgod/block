@@ -29,7 +29,7 @@ pub fn parse_filter_list_js(input: &str) -> Result<JsValue, JsValue> {
 /// Parse an ABP-style filter list, compile supported network filters to DNR,
 /// and return both parser and compiler diagnostics.
 ///
-/// `options` is optional and currently accepts `maxRules` and `firstRuleId`.
+/// `options` is optional and currently accepts `maxRules`, `maxRegexRules`, and `firstRuleId`.
 #[wasm_bindgen(js_name = compileFilterList)]
 pub fn compile_filter_list_js(
 	input: &str,
@@ -64,6 +64,8 @@ fn parse_compile_options(
 struct BridgeCompileOptions {
 	/// Maximum number of DNR rules returned in one report.
 	max_rules: usize,
+	/// Maximum number of regex rules returned in one report.
+	max_regex_rules: usize,
 	/// First positive DNR rule ID assigned to a compiled rule.
 	first_rule_id: u32,
 }
@@ -72,6 +74,7 @@ impl Default for BridgeCompileOptions {
 	fn default() -> Self {
 		Self {
 			max_rules: DnrLimits::default().max_rules,
+			max_regex_rules: DnrLimits::default().max_regex_rules,
 			first_rule_id: CompileOptions::default().first_rule_id,
 		}
 	}
@@ -82,8 +85,7 @@ impl From<BridgeCompileOptions> for CompileOptions {
 		Self {
 			limits: DnrLimits {
 				max_rules: options.max_rules,
-				// Regex filters are not emitted by the current compiler yet.
-				max_regex_rules: DnrLimits::default().max_regex_rules,
+				max_regex_rules: options.max_regex_rules,
 			},
 			first_rule_id: options.first_rule_id,
 		}
@@ -193,6 +195,8 @@ enum CompilerDiagnosticCodeDto {
 	InvalidFirstRuleId,
 	RuleLimitExceeded,
 	RuleIdExhausted,
+	UnsupportedRegex,
+	RegexRuleLimitExceeded,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -245,6 +249,12 @@ fn to_compiler_diagnostic_dto(
 			}
 			CompileDiagnosticCode::RuleIdExhausted => {
 				CompilerDiagnosticCodeDto::RuleIdExhausted
+			}
+			CompileDiagnosticCode::UnsupportedRegex => {
+				CompilerDiagnosticCodeDto::UnsupportedRegex
+			}
+			CompileDiagnosticCode::RegexRuleLimitExceeded => {
+				CompilerDiagnosticCodeDto::RegexRuleLimitExceeded
 			}
 		},
 		message: diagnostic.message.clone(),
@@ -418,18 +428,40 @@ mod tests {
 
 	#[test]
 	fn js_compile_options_use_camel_case_and_default_missing_fields() {
-		let options: BridgeCompileOptions =
-			serde_json::from_value(serde_json::json!({ "maxRules": 17 }))
-				.expect("camelCase compile options deserialize");
+		let options: BridgeCompileOptions = serde_json::from_value(
+			serde_json::json!({ "maxRules": 17, "maxRegexRules": 23 }),
+		)
+		.expect("camelCase compile options deserialize");
 
 		assert_eq!(options.max_rules, 17);
+		assert_eq!(options.max_regex_rules, 23);
 		assert_eq!(options.first_rule_id, 1);
 		assert!(
 			serde_json::from_value::<BridgeCompileOptions>(
-				serde_json::json!({ "maxRules": 17, "unknownOption": true }),
+				serde_json::json!({ "maxRules": 17, "maxRegexRules": 23, "unknownOption": true }),
 			)
 			.is_err()
 		);
+	}
+
+	#[test]
+	fn compile_report_serializes_regex_filter_and_stats() {
+		let report = build_compile_report(
+			r"/^https?:\/\/ads\.example\/foo$/$script,match-case",
+			BridgeCompileOptions::default(),
+		);
+		let value = serde_json::to_value(report).expect("report serializes");
+
+		assert_eq!(
+			value["rules"][0]["condition"]["regexFilter"],
+			r"^https?:\/\/ads\.example\/foo$"
+		);
+		assert!(value["rules"][0]["condition"].get("urlFilter").is_none());
+		assert_eq!(
+			value["rules"][0]["condition"]["isUrlFilterCaseSensitive"],
+			true
+		);
+		assert_eq!(value["compilerStats"]["regexRules"], 1);
 	}
 
 	#[test]
@@ -438,6 +470,7 @@ mod tests {
 			"||one.example^\n||two.example^",
 			BridgeCompileOptions {
 				max_rules: 1,
+				max_regex_rules: 1_000,
 				first_rule_id: 42,
 			},
 		);

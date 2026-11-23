@@ -18,15 +18,12 @@ rules in a later milestone.
 - Parsed resource types and `$match-case`; unqualified filters get an explicit
   common DNR resource-type set including top-level navigations.
 - Configurable rule quotas and deterministic positive rule IDs.
+- ABP regular-expression filters are emitted as DNR `regexFilter` candidates; the browser adapter validates each expression with `isRegexSupported()` before installation.
+- Separate regex-rule quotas and diagnostics for expressions that cannot be represented safely.
 - Structured diagnostics for rules which cannot be compiled safely.
 
 ### Deliberately deferred
 
-- ABP regular-expression rules. DNR regex matching uses RE2 and must be checked
-  by the actual browser using `declarativeNetRequest.isRegexSupported()` before
-  the rules are installed. That browser-side validation belongs in the adapter
-  milestone; this compiler rejects regex filters rather than emitting a rule
-  that a browser may silently ignore.
 - Escaped URL-pattern syntax. ABP escapes need normalization before they can
   safely be passed to DNR.
 - Unknown modifiers, redirect/csp/header modifiers, and advanced options.
@@ -57,10 +54,12 @@ matching-precedence tests.
 `DnrLimits::firefox_dynamic()` uses 5,000. The browser adapter must still read
 runtime capabilities and verify the actual quota before installing rules.
 
-Regex quota is recorded in the profile for the next compiler iteration, but
-regex rules are currently rejected before they can consume that quota. The
-compiler also uses positive 31-bit rule IDs to stay within the browser API
-integer range.
+`DnrLimits::default()` also caps regex candidates at 1,000 per ruleset.
+The extension validates candidate expressions with the target browser's RE2
+implementation before installing them; unsupported candidates are skipped
+with diagnostics. The browser remains authoritative for compiled-regex size
+and syntax limits. The compiler also uses positive 31-bit rule IDs to stay
+within the browser API integer range.
 
 The default resource-type set is an explicit common baseline so generic ABP
 filters can match top-level navigations too. Newer vendor-specific request

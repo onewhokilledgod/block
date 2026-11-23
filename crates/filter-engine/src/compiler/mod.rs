@@ -104,6 +104,9 @@ pub struct DnrCondition {
 	pub url_filter: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	pub regex_filter: Option<String>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub is_url_filter_case_sensitive: Option<bool>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -166,10 +169,12 @@ pub enum CompileDiagnosticLevel {
 pub enum CompileDiagnosticCode {
 	UnsupportedOption,
 	UnsupportedUrlPattern,
+	UnsupportedRegex,
 	UnsupportedDomain,
 	UnsupportedImportantException,
 	InvalidFirstRuleId,
 	RuleLimitExceeded,
+	RegexRuleLimitExceeded,
 	RuleIdExhausted,
 }
 /// Shared error type for a filter that cannot be represented faithfully in DNR.
@@ -244,6 +249,7 @@ pub fn compile_filter_list(
 	let mut next_rule_id = Some(options.first_rule_id);
 	let mut limit_diagnostic_emitted = false;
 	let mut id_diagnostic_emitted = false;
+	let mut regex_limit_diagnostic_emitted = false;
 
 	for filter in &parsed.filters {
 		let Filter::Network(network_filter) = filter else {
@@ -252,6 +258,26 @@ pub fn compile_filter_list(
 		};
 
 		report.stats.network_filters_seen += 1;
+
+		if is_abp_regex_filter(&network_filter.pattern)
+			&& report.stats.regex_rules >= options.limits.max_regex_rules
+		{
+			report.stats.skipped_network_filters += 1;
+			if !regex_limit_diagnostic_emitted {
+				report.diagnostics.push(CompileDiagnostic {
+					line: network_filter.source_line,
+					level: CompileDiagnosticLevel::Warning,
+					code: CompileDiagnosticCode::RegexRuleLimitExceeded,
+					message: format!(
+						"The configured DNR regex rule limit ({}) has been reached; remaining regex filters were skipped",
+						options.limits.max_regex_rules
+					),
+					pattern: network_filter.pattern.clone(),
+				});
+				regex_limit_diagnostic_emitted = true;
+			}
+			continue;
+		}
 
 		if report.rules.len() >= options.limits.max_rules {
 			report.stats.skipped_network_filters += 1;
@@ -288,6 +314,9 @@ pub fn compile_filter_list(
 
 		match compile_network_filter(network_filter, rule_id) {
 			Ok(rule) => {
+				if rule.condition.regex_filter.is_some() {
+					report.stats.regex_rules += 1;
+				}
 				report.rules.push(rule);
 				report.stats.compiled_rules += 1;
 				next_rule_id = (rule_id < MAX_DNR_RULE_ID).then_some(rule_id + 1);
@@ -329,19 +358,30 @@ fn compile_network_filter(
         ));
 	}
 
-	let url_filter = if filter.pattern.is_empty() {
-		None
+	let (url_filter, regex_filter) = if filter.pattern.is_empty() {
+		(None, None)
+	} else if is_abp_regex_filter(&filter.pattern) {
+		let expression = &filter.pattern[1..filter.pattern.len() - 1];
+		if expression.is_empty() || !expression.is_ascii() {
+			return Err((
+				CompileDiagnosticCode::UnsupportedRegex,
+				"ABP regular expressions must be non-empty and contain only ASCII characters".into(),
+			));
+		}
+		(None, Some(expression.to_owned()))
 	} else {
 		validate_url_filter(&filter.pattern)?;
-		Some(filter.pattern.clone())
+		(Some(filter.pattern.clone()), None)
 	};
 
-	let is_url_filter_case_sensitive =
-		if url_filter.is_some() && filter.options.match_case {
-			Some(true)
-		} else {
-			None
-		};
+	let is_url_filter_case_sensitive = if (url_filter.is_some()
+		|| regex_filter.is_some())
+		&& filter.options.match_case
+	{
+		Some(true)
+	} else {
+		None
+	};
 	let (initiator_domains, excluded_initiator_domains) =
 		compile_domains(&filter.options.domains)?;
 
@@ -396,6 +436,7 @@ fn compile_network_filter(
 		action: DnrAction { action_type },
 		condition: DnrCondition {
 			url_filter,
+			regex_filter,
 			is_url_filter_case_sensitive,
 			initiator_domains,
 			excluded_initiator_domains,
@@ -434,6 +475,10 @@ fn validate_url_filter(pattern: &str) -> Result<(), CompileError> {
 	}
 
 	Ok(())
+}
+
+fn is_abp_regex_filter(pattern: &str) -> bool {
+	pattern.len() >= 2 && pattern.starts_with('/') && pattern.ends_with('/')
 }
 
 fn compile_domains(
@@ -632,13 +677,72 @@ mod tests {
 	}
 
 	#[test]
-	fn regex_and_escaped_patterns_are_not_silently_miscompiled() {
+	fn compiles_regex_filters_and_skips_unsupported_escaped_url_patterns() {
 		let report = compile("/ads[0-9]+/\n||escaped\\.example^");
 
+		assert_eq!(report.rules.len(), 1);
+		assert_eq!(report.rules[0].condition.url_filter, None);
+		assert_eq!(
+			report.rules[0].condition.regex_filter.as_deref(),
+			Some("ads[0-9]+")
+		);
+		assert_eq!(report.stats.regex_rules, 1);
+		assert_eq!(report.stats.skipped_network_filters, 1);
+		assert_eq!(
+			report.diagnostics[0].code,
+			CompileDiagnosticCode::UnsupportedUrlPattern
+		);
+	}
+
+	#[test]
+	fn compiles_regex_end_anchor_and_match_case_option() {
+		let report = compile(r"/^https?:\/\/ads\.example\/foo$/$script,match-case");
+		let rule = &report.rules[0];
+
+		assert_eq!(
+			rule.condition.regex_filter.as_deref(),
+			Some(r"^https?:\/\/ads\.example\/foo$")
+		);
+		assert_eq!(rule.condition.url_filter, None);
+		assert_eq!(rule.condition.is_url_filter_case_sensitive, Some(true));
+		assert_eq!(rule.condition.resource_types, vec![DnrResourceType::Script]);
+		assert_eq!(report.stats.regex_rules, 1);
+	}
+
+	#[test]
+	fn regex_rule_quota_does_not_block_non_regex_rules() {
+		let parsed = parse_filter_list("/first/\n||normal.example^\n/second/");
+		let report = compile_filter_list(
+			&parsed,
+			CompileOptions {
+				limits: DnrLimits {
+					max_rules: 10,
+					max_regex_rules: 1,
+				},
+				first_rule_id: 1,
+			},
+		);
+
+		assert_eq!(
+			report.rules.iter().map(|rule| rule.id).collect::<Vec<_>>(),
+			vec![1, 2]
+		);
+		assert_eq!(report.stats.regex_rules, 1);
+		assert_eq!(report.stats.skipped_network_filters, 1);
+		assert_eq!(
+			report.diagnostics[0].code,
+			CompileDiagnosticCode::RegexRuleLimitExceeded
+		);
+	}
+
+	#[test]
+	fn rejects_non_ascii_and_empty_regex_filters() {
+		let report = compile("/café/\n//");
 		assert!(report.rules.is_empty());
 		assert_eq!(report.stats.skipped_network_filters, 2);
-		assert!(report.diagnostics.iter().all(|diagnostic| diagnostic.code
-			== CompileDiagnosticCode::UnsupportedUrlPattern));
+		assert!(report.diagnostics.iter().all(
+			|diagnostic| diagnostic.code == CompileDiagnosticCode::UnsupportedRegex
+		));
 	}
 
 	#[test]
