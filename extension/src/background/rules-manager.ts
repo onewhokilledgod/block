@@ -2,13 +2,12 @@ import type { DnrRule } from "../shared/filter-engine.js";
 
 import { getDnrApi, type DeclarativeNetRequestApi } from "./browser-api.js";
 import type { RegexSupportResult } from "./browser-api.js";
+import {
+	detectBrowserCapabilities,
+	type BrowserCapabilities
+} from "./browser-capabilities.js";
 
 export const MANAGED_RULE_ID_MIN = 1;
-export const MANAGED_RULE_ID_MAX = 5_000;
-
-export const MAX_MANAGED_RULES = MANAGED_RULE_ID_MAX - MANAGED_RULE_ID_MIN + 1;
-
-const MAX_CROSS_BROWSER_DYNAMIC_RULES = 5_000;
 
 export interface RulesUpdateResult {
 	previousManagedCount: number;
@@ -16,11 +15,11 @@ export interface RulesUpdateResult {
 	preservedDynamicRuleCount: number;
 }
 
-function isManagedRuleId(id: number): boolean {
+function isManagedRuleId(id: number, managedRuleIdMax: number): boolean {
 	return (
 		Number.isInteger(id) &&
 		id >= MANAGED_RULE_ID_MIN &&
-		id <= MANAGED_RULE_ID_MAX
+		id <= managedRuleIdMax
 	);
 }
 
@@ -29,14 +28,17 @@ function isManagedRuleId(id: number): boolean {
  *
  * Invalid input is rejected before existing rules can be removed.
  */
-function validateRules(rules: readonly DnrRule[]): void {
+function validateRules(
+	rules: readonly DnrRule[],
+	managedRuleIdMax: number
+): void {
 	if (!Array.isArray(rules)) {
 		throw new TypeError("Rules must be an array.");
 	}
 
-	if (rules.length > MAX_MANAGED_RULES) {
+	if (rules.length > managedRuleIdMax) {
 		throw new RangeError(
-			`Too many rules: ${rules.length}. ` + `Maximum: ${MAX_MANAGED_RULES}.`
+			`Too many rules: ${rules.length}. ` + `Maximum: ${managedRuleIdMax}.`
 		);
 	}
 
@@ -47,7 +49,7 @@ function validateRules(rules: readonly DnrRule[]): void {
 			throw new TypeError("Invalid DNR rule.");
 		}
 
-		if (!isManagedRuleId(rule.id)) {
+		if (!isManagedRuleId(rule.id, managedRuleIdMax)) {
 			throw new RangeError(`Rule ID ${rule.id} is outside the managed range.`);
 		}
 
@@ -117,14 +119,24 @@ function validateRules(rules: readonly DnrRule[]): void {
 
 export class DnrRulesManager {
 	private readonly api: DeclarativeNetRequestApi;
+	readonly capabilities: BrowserCapabilities;
+	private readonly managedRuleIdMax: number;
 
 	/**
 	 * Serializes modifications to prevent concurrent replacements.
 	 */
 	private operationQueue: Promise<void> = Promise.resolve();
 
-	constructor(api: DeclarativeNetRequestApi = getDnrApi()) {
+	constructor(
+		api: DeclarativeNetRequestApi = getDnrApi(),
+		capabilities: BrowserCapabilities = detectBrowserCapabilities(api)
+	) {
 		this.api = api;
+		this.capabilities = capabilities;
+		this.managedRuleIdMax = Math.min(
+			capabilities.maxDynamicRules,
+			capabilities.maxRuleId
+		);
 	}
 
 	/**
@@ -156,9 +168,32 @@ export class DnrRulesManager {
 			const rules = await this.api.getDynamicRules();
 
 			return rules
-				.filter(rule => isManagedRuleId(rule.id))
+				.filter(rule =>
+					isManagedRuleId(rule.id, this.managedRuleIdMax)
+				)
 				.map(rule => rule.id)
 				.sort((a, b) => a - b);
+		});
+	}
+
+	/**
+	 * Returns the rule count available to the managed ID range after preserving
+	 * dynamic rules owned by other modules of this extension.
+	 */
+	getAvailableManagedRuleCapacity(): Promise<number> {
+		return this.enqueue(async () => {
+			const existingRules = await this.api.getDynamicRules();
+			const preservedCount = existingRules.filter(
+				rule => !isManagedRuleId(rule.id, this.managedRuleIdMax)
+			).length;
+
+			return Math.max(
+				0,
+				Math.min(
+					this.managedRuleIdMax,
+					this.capabilities.maxDynamicRules - preservedCount
+				)
+			);
 		});
 	}
 
@@ -171,17 +206,22 @@ export class DnrRulesManager {
 		const nextRules = Array.from(rules);
 
 		return this.enqueue(async () => {
-			validateRules(nextRules);
+			validateRules(nextRules, this.managedRuleIdMax);
 
 			const existingRules = await this.api.getDynamicRules();
 
 			const managedIds = existingRules
-				.filter(rule => isManagedRuleId(rule.id))
+				.filter(rule =>
+					isManagedRuleId(rule.id, this.managedRuleIdMax)
+				)
 				.map(rule => rule.id);
 
 			const preservedCount = existingRules.length - managedIds.length;
 
-			if (preservedCount + nextRules.length > MAX_CROSS_BROWSER_DYNAMIC_RULES) {
+			if (
+				preservedCount + nextRules.length >
+				this.capabilities.maxDynamicRules
+			) {
 				throw new RangeError(
 					"The cross-browser dynamic rule limit would be exceeded."
 				);

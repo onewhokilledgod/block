@@ -21,11 +21,25 @@ export interface DynamicRulesUpdate {
 }
 
 export interface DeclarativeNetRequestApi {
+	readonly MAX_NUMBER_OF_DYNAMIC_RULES?: number;
+	readonly MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES?: number;
+	readonly MAX_NUMBER_OF_REGEX_RULES?: number;
+	readonly MAX_NUMBER_OF_SESSION_RULES?: number;
+
 	getDynamicRules(): Promise<ExistingDynamicRule[]>;
 
 	updateDynamicRules(options: DynamicRulesUpdate): Promise<void>;
 
 	isRegexSupported?(options: RegexOptions): Promise<RegexSupportResult>;
+
+	getSessionRules?(): Promise<unknown[]>;
+	updateSessionRules?(options: unknown): Promise<void>;
+
+	getEnabledRulesets?(): Promise<string[]>;
+	updateEnabledRulesets?(options: unknown): Promise<void>;
+	updateStaticRules?(options: unknown): Promise<void>;
+	getAvailableStaticRuleCount?(): Promise<number>;
+	getMatchedRules?(filter?: unknown): Promise<unknown[]>;
 }
 
 interface ExtensionApiNamespace {

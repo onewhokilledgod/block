@@ -5,8 +5,7 @@ export interface FilterListDefinition {
 	name: string;
 	url: string;
 	expectedTitle: string;
-	firstRuleId: number;
-	ruleBudget: number;
+	ruleWeight: number;
 	maxBytes: number;
 	enabledByDefault: boolean;
 }
@@ -19,8 +18,7 @@ export const FILTER_LISTS: readonly FilterListDefinition[] = [
 		name: "EasyList",
 		url: "https://easylist.to/easylist/easylist.txt",
 		expectedTitle: "EasyList",
-		firstRuleId: 1,
-		ruleBudget: 3500,
+		ruleWeight: 7,
 		maxBytes: MAX_LIST_BYTES,
 		enabledByDefault: true
 	},
@@ -29,8 +27,7 @@ export const FILTER_LISTS: readonly FilterListDefinition[] = [
 		name: "EasyPrivacy",
 		url: "https://easylist.to/easylist/easyprivacy.txt",
 		expectedTitle: "EasyPrivacy",
-		firstRuleId: 3501,
-		ruleBudget: 1500,
+		ruleWeight: 3,
 		maxBytes: MAX_LIST_BYTES,
 		enabledByDefault: true
 	}

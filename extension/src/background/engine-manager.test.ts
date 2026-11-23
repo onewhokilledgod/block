@@ -166,6 +166,7 @@ describe("FilterEngineManager", () => {
 		expect(compileFilterLists).toHaveBeenCalledTimes(1);
 		expect(compileFilterList).toHaveBeenNthCalledWith(1, "easylist content", {
 			maxRules: 3500,
+			maxRegexRules: 1000,
 			firstRuleId: 1
 		});
 
@@ -174,6 +175,7 @@ describe("FilterEngineManager", () => {
 			"easyprivacy content",
 			{
 				maxRules: 1500,
+				maxRegexRules: 1000,
 				firstRuleId: 3501
 			}
 		);
@@ -188,6 +190,38 @@ describe("FilterEngineManager", () => {
 		expect(mockApi.updates[0].addRules).toHaveLength(2);
 
 		expect(mockApi.getCurrentIds().sort((a, b) => a - b)).toEqual([1, 3501]);
+	});
+
+	it("allocates the larger safe dynamic-rule budget exposed by Chrome", async () => {
+		const { engine, compileFilterList } = createEngine();
+		const mockApi = createMockRulesApi();
+		Object.assign(mockApi.api, {
+			MAX_NUMBER_OF_DYNAMIC_RULES: 30_000,
+			MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES: 5_000,
+			MAX_NUMBER_OF_REGEX_RULES: 1_000
+		});
+
+		const manager = new FilterEngineManager(
+			engine,
+			new DnrRulesManager(mockApi.api)
+		);
+
+		await manager.applyFilterLists([
+			{ id: "easylist", content: "easylist content" },
+			{ id: "easyprivacy", content: "easyprivacy content" }
+		]);
+
+		expect(compileFilterList).toHaveBeenNthCalledWith(1, "easylist content", {
+			maxRules: 21_000,
+			maxRegexRules: 1_000,
+			firstRuleId: 1
+		});
+		expect(compileFilterList).toHaveBeenNthCalledWith(2, "easyprivacy content", {
+			maxRules: 9_000,
+			maxRegexRules: 1_000,
+			firstRuleId: 21_001
+		});
+		expect(mockApi.getCurrentIds()).toEqual([1, 21_001]);
 	});
 
 	it("rejects missing required lists", async () => {
@@ -338,6 +372,37 @@ describe("FilterEngineManager", () => {
 		expect(mockApi.isRegexSupported).toHaveBeenCalledTimes(1);
 		expect(result.report.rules).toHaveLength(2);
 		expect(result.report.compilerStats.regexRules).toBe(2);
+	});
+
+	it("skips regex rules safely when browser-side regex validation is unavailable", async () => {
+		const { engine, compileFilterList } = createEngine();
+		const mockApi = createMockRulesApi();
+		delete mockApi.api.isRegexSupported;
+		const regex = "^https?://ads\\.example/";
+		compileFilterList.mockReturnValue(
+			createReport(1, [createRule(1), createRegexRule(2, regex)])
+		);
+
+		const manager = new FilterEngineManager(
+			engine,
+			new DnrRulesManager(mockApi.api)
+		);
+		const result = await manager.applyFilterList("mixed rules");
+
+		expect(compileFilterList).toHaveBeenCalledWith("mixed rules", {
+			maxRules: 5_000,
+			maxRegexRules: 0,
+			firstRuleId: 1
+		});
+		expect(mockApi.isRegexSupported).not.toHaveBeenCalled();
+		expect(result.report.rules.map(rule => rule.id)).toEqual([1]);
+		expect(result.report.compilerDiagnostics).toContainEqual(
+			expect.objectContaining({
+				level: "warning",
+				code: "unsupportedRegex",
+				pattern: regex
+			})
+		);
 	});
 
 	it("preserves existing DNR rules when browser regex validation fails", async () => {

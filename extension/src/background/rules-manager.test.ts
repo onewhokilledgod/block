@@ -84,6 +84,26 @@ describe("DnrRulesManager", () => {
 		await expect(manager.getManagedRuleIds()).resolves.toEqual([1, 3, 5000]);
 	});
 
+	it("uses the runtime dynamic-rule quota to define its managed ID range", async () => {
+		const mock = createMockApi([{ id: 2 }, { id: 6000 }, { id: 30_001 }]);
+		Object.assign(mock.api, {
+			MAX_NUMBER_OF_DYNAMIC_RULES: 30_000,
+			MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES: 5_000
+		});
+		const manager = new DnrRulesManager(mock.api);
+
+		await expect(manager.getManagedRuleIds()).resolves.toEqual([2, 6000]);
+		await manager.replaceManagedRules([createRule(30_000)]);
+		expect(mock.getCurrentIds().sort((a, b) => a - b)).toEqual([30_000, 30_001]);
+	});
+
+	it("subtracts preserved external rules when reporting available capacity", async () => {
+		const mock = createMockApi([{ id: 5_001 }, { id: 5_002 }]);
+		const manager = new DnrRulesManager(mock.api);
+
+		await expect(manager.getAvailableManagedRuleCapacity()).resolves.toBe(4_998);
+	});
+
 	it("replaces managed rules and preserves foreign rules", async () => {
 		const mock = createMockApi([{ id: 1 }, { id: 20 }, { id: 6000 }]);
 

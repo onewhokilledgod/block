@@ -5,6 +5,7 @@ import type {
 	FilterEngine
 } from "../shared/filter-engine.js";
 import type { RegexSupportResult } from "./browser-api.js";
+import { allocateFilterListRuleRanges } from "./rule-id-allocator.js";
 export type { CompileReport };
 
 import {
@@ -114,7 +115,6 @@ function combineReports(
 	};
 }
 
-const MAX_DNR_REGEX_RULES = 1_000;
 const REGEX_CHECK_BATCH_SIZE = 16;
 
 
@@ -135,15 +135,19 @@ export class FilterEngineManager {
 			);
 		}
 
+		const availableRuleCapacity =
+			await this.rulesManager.getAvailableManagedRuleCapacity();
+		const regexRuleLimit = this.getRegexRuleLimit();
 		const report = this.engine.compileFilterList(input, {
-			maxRules: 5000,
+			maxRules: availableRuleCapacity,
+			maxRegexRules: regexRuleLimit,
 			firstRuleId: 1
 		});
 
 		this.validateReport(report);
 		const validatedReport = await this.validateRegexRules(
 			report,
-			MAX_DNR_REGEX_RULES,
+			regexRuleLimit,
 			new Map()
 		);
 		this.validateReport(validatedReport);
@@ -209,13 +213,28 @@ export class FilterEngineManager {
 			);
 		}
 
-		const compileInputs = requiredLists.map(definition => ({
-			content: inputMap.get(definition.id)!,
-			options: {
-				maxRules: definition.ruleBudget,
-				firstRuleId: definition.firstRuleId
-			}
-		}));
+		const availableRuleCapacity =
+			await this.rulesManager.getAvailableManagedRuleCapacity();
+		const allocations = allocateFilterListRuleRanges(
+			requiredLists,
+			availableRuleCapacity,
+			this.rulesManager.capabilities.maxRuleId
+		);
+		const allocationById = new Map(
+			allocations.map(allocation => [allocation.id, allocation])
+		);
+		const regexRuleLimit = this.getRegexRuleLimit();
+		const compileInputs = requiredLists.map(definition => {
+			const allocation = allocationById.get(definition.id)!;
+			return {
+				content: inputMap.get(definition.id)!,
+				options: {
+					maxRules: allocation.maxRules,
+					maxRegexRules: regexRuleLimit,
+					firstRuleId: allocation.firstRuleId
+				}
+			};
+		});
 		const reports = this.engine.compileFilterLists(compileInputs);
 
 		if (reports.length !== requiredLists.length) {
@@ -253,10 +272,15 @@ export class FilterEngineManager {
 				);
 			}
 
-			const lastRuleId = definition.firstRuleId + definition.ruleBudget - 1;
+			const allocation = allocationById.get(definition.id)!;
+			const lastRuleId =
+				allocation.firstRuleId + allocation.maxRules - 1;
 
 			for (const rule of report.rules) {
-				if (rule.id < definition.firstRuleId || rule.id > lastRuleId) {
+				if (
+					rule.id < allocation.firstRuleId ||
+					rule.id > lastRuleId
+				) {
 					throw new FilterApplicationError(
 						`List '${definition.id}' produced a rule ` +
 							`outside its allocated ID range.`,
@@ -276,7 +300,7 @@ export class FilterEngineManager {
 		this.validateReport(compiledReport);
 
 		const regexSupportCache = new Map<string, RegexSupportResult>();
-		let remainingRegexRuleQuota = MAX_DNR_REGEX_RULES;
+		let remainingRegexRuleQuota = regexRuleLimit;
 
 		for (let index = 0; index < compilations.length; index += 1) {
 			const compilation = compilations[index]!;
@@ -317,6 +341,12 @@ export class FilterEngineManager {
 			report: combinedReport,
 			update
 		};
+	}
+
+	private getRegexRuleLimit(): number {
+		return this.rulesManager.capabilities.features.regexValidation
+			? this.rulesManager.capabilities.maxRegexRules
+			: 0;
 	}
 
 	/**
@@ -427,7 +457,7 @@ export class FilterEngineManager {
 					level: "warning",
 					code: "unsupportedRegex",
 					message:
-						`The cross-browser regex rule limit (${MAX_DNR_REGEX_RULES}) ` +
+						`The browser regex rule limit (${this.getRegexRuleLimit()}) ` +
 						"has been reached; this rule was skipped.",
 					pattern: regex
 				});

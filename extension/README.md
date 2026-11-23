@@ -26,5 +26,15 @@ managed dynamic rules to be rebuilt from the verified active filter-list
 snapshot on every browser startup, even when downloaded list content is
 unchanged. Actual network filtering remains dynamically compiled and managed.
 
+Dynamic DNR quotas are read from the running browser instead of being
+hard-coded. Chrome permits up to 30,000 dynamic rules overall, with a separate
+5,000-rule ceiling for unsafe actions; Firefox exposes 5,000 dynamic rules and
+no separate unsafe-action quota. Regex quotas and optional API features are
+also detected at runtime. Missing or invalid quota constants fall back to
+conservative cross-browser defaults. If browser-side regex validation is
+unavailable, regex filters are skipped with diagnostics while non-regex
+filters remain usable. Managed rule IDs are allocated deterministically between
+enabled lists using their configured weights.
+
 Do not add remote executable code. Filter-list downloads are data and must be
 parsed as untrusted input.
