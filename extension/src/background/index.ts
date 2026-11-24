@@ -6,6 +6,7 @@ import {
 } from "../shared/browser-content-api.js";
 import { REFRESH_FILTER_LISTS_MESSAGE } from "../shared/options-messages.js";
 
+import { getBrowserHostPermissionsApi } from "./browser-api.js";
 import { DnrRulesManager } from "./rules-manager.js";
 import { FilterEngineManager } from "./engine-manager.js";
 
@@ -40,7 +41,11 @@ function getBackgroundServices(): Promise<BackgroundServices> {
 	const creation = (async (): Promise<BackgroundServices> => {
 		const engine = await initializeFilterEngine();
 
-		const rulesManager = new DnrRulesManager();
+		const rulesManager = new DnrRulesManager(
+			undefined,
+			undefined,
+			getBrowserHostPermissionsApi()
+		);
 
 		const engineManager = new FilterEngineManager(engine, rulesManager);
 

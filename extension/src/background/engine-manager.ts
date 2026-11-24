@@ -138,10 +138,13 @@ export class FilterEngineManager {
 		const availableRuleCapacity =
 			await this.rulesManager.getAvailableManagedRuleCapacity();
 		const regexRuleLimit = this.getRegexRuleLimit();
+		const allowUrlModification =
+			await this.rulesManager.hasUrlModificationPermissions();
 		const report = this.engine.compileFilterList(input, {
 			maxRules: availableRuleCapacity,
 			maxRegexRules: regexRuleLimit,
-			firstRuleId: 1
+			firstRuleId: 1,
+			...(allowUrlModification ? { allowUrlModification: true } : {})
 		});
 
 		this.validateReport(report);
@@ -220,6 +223,8 @@ export class FilterEngineManager {
 			availableRuleCapacity,
 			this.rulesManager.capabilities.maxRuleId
 		);
+		const allowUrlModification =
+			await this.rulesManager.hasUrlModificationPermissions();
 		const allocationById = new Map(
 			allocations.map(allocation => [allocation.id, allocation])
 		);
@@ -231,7 +236,8 @@ export class FilterEngineManager {
 				options: {
 					maxRules: allocation.maxRules,
 					maxRegexRules: regexRuleLimit,
-					firstRuleId: allocation.firstRuleId
+					firstRuleId: allocation.firstRuleId,
+					...(allowUrlModification ? { allowUrlModification: true } : {})
 				}
 			};
 		});

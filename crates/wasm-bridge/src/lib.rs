@@ -85,6 +85,8 @@ struct BridgeCompileOptions {
 	max_regex_rules: usize,
 	/// First positive DNR rule ID assigned to a compiled rule.
 	first_rule_id: u32,
+	/// Whether the caller has DNR redirect host permissions.
+	allow_url_modification: bool,
 }
 
 impl Default for BridgeCompileOptions {
@@ -93,6 +95,7 @@ impl Default for BridgeCompileOptions {
 			max_rules: DnrLimits::default().max_rules,
 			max_regex_rules: DnrLimits::default().max_regex_rules,
 			first_rule_id: CompileOptions::default().first_rule_id,
+			allow_url_modification: false,
 		}
 	}
 }
@@ -105,6 +108,7 @@ impl From<BridgeCompileOptions> for CompileOptions {
 				max_regex_rules: options.max_regex_rules,
 			},
 			first_rule_id: options.first_rule_id,
+			allow_url_modification: options.allow_url_modification,
 		}
 	}
 }
@@ -157,6 +161,7 @@ struct NetworkOptionsDto {
 	elemhide: bool,
 	generichide: bool,
 	genericblock: bool,
+	remove_params: Vec<String>,
 	unsupported: Vec<String>,
 }
 
@@ -229,6 +234,7 @@ enum CompilerDiagnosticCodeDto {
 	RuleIdExhausted,
 	UnsupportedRegex,
 	RegexRuleLimitExceeded,
+	MissingHostPermissions,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -287,6 +293,9 @@ fn to_compiler_diagnostic_dto(
 			}
 			CompileDiagnosticCode::RegexRuleLimitExceeded => {
 				CompilerDiagnosticCodeDto::RegexRuleLimitExceeded
+			}
+			CompileDiagnosticCode::MissingHostPermissions => {
+				CompilerDiagnosticCodeDto::MissingHostPermissions
 			}
 		},
 		message: diagnostic.message.clone(),
@@ -391,6 +400,7 @@ fn to_filter_dto(filter: &Filter) -> ParsedFilterDto {
 				elemhide: filter.options.elemhide,
 				generichide: filter.options.generichide,
 				genericblock: filter.options.genericblock,
+				remove_params: filter.options.remove_params.clone(),
 				unsupported: filter.options.unsupported.clone(),
 			},
 			source_line: filter.source_line,
@@ -567,6 +577,7 @@ mod tests {
 				max_rules: 1,
 				max_regex_rules: 1_000,
 				first_rule_id: 42,
+				allow_url_modification: false,
 			},
 		);
 
@@ -600,5 +611,25 @@ mod tests {
 		assert_eq!(value[1]["rules"].as_array().unwrap().len(), 1);
 		assert_eq!(value[1]["rules"][0]["id"], 3501);
 		assert_eq!(value[1]["compilerStats"]["skippedNetworkFilters"], 1);
+	}
+
+	#[test]
+	fn removeparam_compile_option_serializes_the_supported_dnr_redirect_shape() {
+		let report = build_compile_report(
+			"||example.com^$removeparam=utm_source",
+			BridgeCompileOptions {
+				allow_url_modification: true,
+				..BridgeCompileOptions::default()
+			},
+		);
+		let value = serde_json::to_value(report).expect("report serializes");
+
+		assert_eq!(value["rules"][0]["action"]["type"], "redirect");
+		assert_eq!(
+			value["rules"][0]["action"]["redirect"]["transform"]["queryTransform"]["removeParams"]
+				[0],
+			"utm_source"
+		);
+		assert_eq!(value["rules"][0]["condition"]["requestMethods"][0], "get");
 	}
 }

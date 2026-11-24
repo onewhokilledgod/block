@@ -11,6 +11,10 @@ import { REFRESH_FILTER_LISTS_MESSAGE } from "../shared/options-messages.js";
 
 const storage = new FilterListStorage();
 const api = getBrowserContentApi();
+const URL_MODIFICATION_HOST_ORIGINS = [
+	"http://*/*",
+	"https://*/*"
+];
 
 function requiredElement<T extends HTMLElement>(selector: string): T {
 	const element = document.querySelector<T>(selector);
@@ -36,6 +40,7 @@ const subscriptionNameInput = requiredElement<HTMLInputElement>("#subscription-n
 const subscriptionUrlInput = requiredElement<HTMLInputElement>("#subscription-url");
 const refreshButton = requiredElement<HTMLButtonElement>("#refresh-lists");
 const resetButton = requiredElement<HTMLButtonElement>("#reset-settings");
+const urlModificationAccessButton = requiredElement<HTMLButtonElement>("#url-modification-access");
 
 let settings: UserSettings;
 let subscriptions: StoredFilterListSubscription[] = [];
@@ -57,6 +62,21 @@ function setStatus(message: string, tone: "neutral" | "success" | "error" = "neu
 
 function applyTheme(theme: UserSettings["theme"]): void {
 	document.documentElement.dataset.theme = theme;
+}
+
+async function refreshUrlModificationPermissionStatus(): Promise<void> {
+	try {
+		const granted = await api.permissions.contains({
+			origins: URL_MODIFICATION_HOST_ORIGINS
+		});
+		urlModificationAccessButton.textContent = granted
+			? "Website access granted"
+			: "Grant website access";
+		urlModificationAccessButton.disabled = !pageReady || granted;
+	} catch {
+		urlModificationAccessButton.textContent = "Check website access";
+		urlModificationAccessButton.disabled = !pageReady;
+	}
 }
 
 function renderSettings(): void {
@@ -254,6 +274,37 @@ refreshButton.addEventListener("click", () => {
 	});
 });
 
+urlModificationAccessButton.addEventListener("click", () => {
+	urlModificationAccessButton.disabled = true;
+	setStatus("Requesting optional access to HTTP and HTTPS websites…");
+
+	// Start the permission request directly from this user gesture.
+	void api.permissions.request({
+		origins: URL_MODIFICATION_HOST_ORIGINS
+	}).then(async granted => {
+		if (!granted) {
+			throw new Error("Website access was not granted; URL-modification rules remain disabled.");
+		}
+
+		setStatus("Website access granted. Rebuilding supported filter rules…");
+		const response = await api.runtime.sendMessage({
+			type: REFRESH_FILTER_LISTS_MESSAGE
+		});
+		if (!isRecord(response) || response.ok !== true) {
+			const message = isRecord(response) && typeof response.error === "string"
+				? response.error
+				: "Filter-rule rebuild failed.";
+			throw new Error(`Website access was granted, but filter rules could not be rebuilt: ${message}`);
+		}
+
+		setStatus("Website access granted; supported URL-modification rules were rebuilt.", "success");
+	}).catch(error => {
+		setStatus(error instanceof Error ? error.message : "Could not update website access.", "error");
+	}).finally(() => {
+		void refreshUrlModificationPermissionStatus();
+	});
+});
+
 resetButton.addEventListener("click", () => {
 	void storage.resetUserSettings().then(
 		updated => {
@@ -276,6 +327,7 @@ async function initialize(): Promise<void> {
 		for (const control of pageControls) {
 			control.disabled = false;
 		}
+		await refreshUrlModificationPermissionStatus();
 		renderSettings();
 		renderSubscriptions();
 		setStatus("Settings loaded.");

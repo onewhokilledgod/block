@@ -11,6 +11,7 @@ const FILTER_LIST = [
 	"||127.0.0.1*/ads/$script",
 	"@@||127.0.0.1*/ads/allowed.js$script",
 	"||127.0.0.1*/scoped/domain.js$script,domain=localhost",
+	"||127.0.0.1*/ads/removeparam.json$xmlhttprequest,removeparam=e2e_remove",
 	"##.e2e-ad"
 ].join("\n");
 
@@ -46,12 +47,13 @@ const readyPromise = (async (): Promise<void> => {
 	const report = filterEngine.compileFilterList(FILTER_LIST, {
 		maxRules: 100,
 		maxRegexRules: 100,
-		firstRuleId: 1
+		firstRuleId: 1,
+		allowUrlModification: true
 	});
 
 	if (
 		report.compilerStats.skippedNetworkFilters !== 0 ||
-		report.rules.length !== 3
+		report.rules.length !== 4
 	) {
 		throw new Error(
 			"The browser E2E filter fixture did not compile as expected: " +
@@ -59,12 +61,17 @@ const readyPromise = (async (): Promise<void> => {
 		);
 	}
 
-	const rulesManager = new DnrRulesManager();
+	const rulesManager = new DnrRulesManager(undefined, undefined, {
+		// The E2E fixture only grants localhost access in its manifest; this
+		// adapter authorizes compilation while the browser enforces that real
+		// localhost permission when the redirect rule is installed/matched.
+		contains: async () => true
+	});
 	const result = await rulesManager.replaceManagedRules(report.rules);
 
-	if (result.installedCount !== 3) {
+	if (result.installedCount !== 4) {
 		throw new Error(
-			`Expected to install 3 DNR rules; installed ${result.installedCount}.`
+			`Expected to install 4 DNR rules; installed ${result.installedCount}.`
 		);
 	}
 })();

@@ -32,6 +32,7 @@ export interface NetworkOptions {
 	elemhide: boolean;
 	generichide: boolean;
 	genericblock: boolean;
+	removeParams: string[];
 	unsupported: string[];
 }
 
@@ -78,6 +79,7 @@ export interface CompileOptions {
 	maxRules?: number;
 	maxRegexRules?: number;
 	firstRuleId?: number;
+	allowUrlModification?: boolean;
 }
 
 export interface FilterListCompileInput {
@@ -85,7 +87,7 @@ export interface FilterListCompileInput {
 	options?: CompileOptions;
 }
 
-export type DnrActionType = "block" | "allow";
+export type DnrActionType = "block" | "allow" | "redirect";
 
 export type CompilerDiagnosticCode =
 	| "unsupportedOption"
@@ -96,10 +98,12 @@ export type CompilerDiagnosticCode =
 	| "ruleLimitExceeded"
 	| "regexRuleLimitExceeded"
 	| "ruleIdExhausted"
-	| "unsupportedRegex";
+	| "unsupportedRegex"
+	| "missingHostPermissions";
 
 export interface DnrAction {
 	type: DnrActionType;
+	redirect?: { transform: { queryTransform: { removeParams: string[] } } };
 }
 
 export interface DnrCondition {
@@ -110,6 +114,7 @@ export interface DnrCondition {
 	initiatorDomains?: string[];
 	excludedInitiatorDomains?: string[];
 	domainType?: "firstParty" | "thirdParty";
+	requestMethods?: Array<"get" | "head" | "options">;
 }
 
 export interface DnrRule {

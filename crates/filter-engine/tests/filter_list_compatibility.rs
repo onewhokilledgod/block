@@ -283,7 +283,6 @@ fn abp_syntax_fixture_covers_common_options_and_preserves_unsupported_syntax() {
 			"webbundle",
 			"csp=script-src 'none'",
 			"redirect=trusted-resource",
-			"removeparam=utm_source",
 		]
 	);
 
@@ -307,7 +306,15 @@ fn abp_syntax_fixture_covers_common_options_and_preserves_unsupported_syntax() {
 	// Syntactically recognized does not mean representable by DNR. The
 	// compiler must reject signed/page-scoped and newer modifier semantics
 	// instead of dropping their conditions and emitting broader rules.
-	let report = compile_filter_list(&parsed, CompileOptions::default());
+	// Grant URL-modification permission here so this fixture isolates the
+	// remaining unsupported modifiers rather than the separate permission gate.
+	let report = compile_filter_list(
+		&parsed,
+		CompileOptions {
+			allow_url_modification: true,
+			..CompileOptions::default()
+		},
+	);
 	assert_eq!(report.stats.network_filters_seen, 15);
 	assert_eq!(report.stats.compiled_rules, 11);
 	assert_eq!(report.stats.skipped_network_filters, 4);

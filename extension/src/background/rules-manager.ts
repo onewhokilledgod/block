@@ -1,13 +1,22 @@
 import type { DnrRule } from "../shared/filter-engine.js";
 
-import { getDnrApi, type DeclarativeNetRequestApi } from "./browser-api.js";
-import type { RegexSupportResult } from "./browser-api.js";
+import {
+	getDnrApi,
+	type BrowserHostPermissionsApi,
+	type DeclarativeNetRequestApi,
+	type RegexSupportResult
+} from "./browser-api.js";
 import {
 	detectBrowserCapabilities,
 	type BrowserCapabilities
 } from "./browser-capabilities.js";
 
 export const MANAGED_RULE_ID_MIN = 1;
+
+const URL_MODIFICATION_HOST_ORIGINS = [
+	"http://*/*",
+	"https://*/*"
+] as const;
 
 export interface RulesUpdateResult {
 	previousManagedCount: number;
@@ -63,8 +72,31 @@ function validateRules(
 			throw new RangeError(`Invalid priority for rule ${rule.id}.`);
 		}
 
-		if (rule.action.type !== "block" && rule.action.type !== "allow") {
+		if (
+			rule.action.type !== "block" &&
+			rule.action.type !== "allow" &&
+			rule.action.type !== "redirect"
+		) {
 			throw new TypeError(`Unsupported action for rule ${rule.id}.`);
+		}
+		if (rule.action.type === "redirect") {
+			const removeParams =
+				rule.action.redirect?.transform?.queryTransform?.removeParams;
+			if (
+				!Array.isArray(removeParams) ||
+				removeParams.length === 0 ||
+				!removeParams.every(
+					parameter => typeof parameter === "string" && parameter.length > 0
+				)
+			) {
+				throw new TypeError(
+					`Redirect rule ${rule.id} must specify query parameters to remove.`
+				);
+			}
+		} else if (rule.action.redirect !== undefined) {
+			throw new TypeError(
+				`Non-redirect rule ${rule.id} cannot specify redirect details.`
+			);
 		}
 
 		if (!rule.condition || typeof rule.condition !== "object") {
@@ -114,6 +146,17 @@ function validateRules(
 		) {
 			throw new TypeError(`Rule ${rule.id} has invalid resource types.`);
 		}
+
+		if (
+			rule.condition.requestMethods !== undefined &&
+			(!Array.isArray(rule.condition.requestMethods) ||
+				rule.condition.requestMethods.length === 0 ||
+				!rule.condition.requestMethods.every(
+					(method: unknown) => typeof method === "string"
+				))
+		) {
+			throw new TypeError(`Rule ${rule.id} has invalid request methods.`);
+		}
 	}
 }
 
@@ -129,7 +172,8 @@ export class DnrRulesManager {
 
 	constructor(
 		api: DeclarativeNetRequestApi = getDnrApi(),
-		capabilities: BrowserCapabilities = detectBrowserCapabilities(api)
+		capabilities: BrowserCapabilities = detectBrowserCapabilities(api),
+		private readonly hostPermissions?: BrowserHostPermissionsApi
 	) {
 		this.api = api;
 		this.capabilities = capabilities;
@@ -137,6 +181,24 @@ export class DnrRulesManager {
 			capabilities.maxDynamicRules,
 			capabilities.maxRuleId
 		);
+	}
+
+	/**
+	 * URL-transforming DNR actions require optional host access for the
+	 * request URL and its initiator. No permission is requested here.
+	 */
+	async hasUrlModificationPermissions(): Promise<boolean> {
+		if (!this.hostPermissions) {
+			return false;
+		}
+
+		try {
+			return await this.hostPermissions.contains({
+				origins: [...URL_MODIFICATION_HOST_ORIGINS]
+			});
+		} catch {
+			return false;
+		}
 	}
 
 	/**
@@ -207,6 +269,15 @@ export class DnrRulesManager {
 
 		return this.enqueue(async () => {
 			validateRules(nextRules, this.managedRuleIdMax);
+
+			if (
+				nextRules.some(rule => rule.action.type === "redirect") &&
+				!(await this.hasUrlModificationPermissions())
+			) {
+				throw new Error(
+					"URL-modification rules require optional host access to all HTTP and HTTPS websites."
+				);
+			}
 
 			const existingRules = await this.api.getDynamicRules();
 

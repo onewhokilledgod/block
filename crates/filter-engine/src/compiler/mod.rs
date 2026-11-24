@@ -66,6 +66,8 @@ pub struct CompileOptions {
 	pub limits: DnrLimits,
 	/// First rule ID in the output ruleset. DNR IDs must be positive.
 	pub first_rule_id: u32,
+	/// Whether the caller has the host permissions required by DNR redirect actions.
+	pub allow_url_modification: bool,
 }
 
 impl Default for CompileOptions {
@@ -73,6 +75,7 @@ impl Default for CompileOptions {
 		Self {
 			limits: DnrLimits::default(),
 			first_rule_id: 1,
+			allow_url_modification: false,
 		}
 	}
 }
@@ -90,6 +93,26 @@ pub struct DnrRule {
 pub struct DnrAction {
 	#[serde(rename = "type")]
 	pub action_type: DnrActionType,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub redirect: Option<DnrRedirect>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DnrRedirect {
+	pub transform: DnrUrlTransform,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DnrUrlTransform {
+	pub query_transform: DnrQueryTransform,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DnrQueryTransform {
+	pub remove_params: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -97,6 +120,7 @@ pub struct DnrAction {
 pub enum DnrActionType {
 	Block,
 	Allow,
+	Redirect,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -120,6 +144,9 @@ pub struct DnrCondition {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub domain_type: Option<DnrDomainType>,
 
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub request_methods: Option<Vec<DnrRequestMethod>>,
+
 	pub resource_types: Vec<DnrResourceType>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -127,6 +154,14 @@ pub struct DnrCondition {
 pub enum DnrDomainType {
 	FirstParty,
 	ThirdParty,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DnrRequestMethod {
+	Get,
+	Head,
+	Options,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -178,6 +213,7 @@ pub enum CompileDiagnosticCode {
 	RuleLimitExceeded,
 	RegexRuleLimitExceeded,
 	RuleIdExhausted,
+	MissingHostPermissions,
 }
 /// Shared error type for a filter that cannot be represented faithfully in DNR.
 type CompileError = (CompileDiagnosticCode, String);
@@ -234,6 +270,8 @@ fn badfilter_key(filter: &NetworkFilter) -> BadfilterKey {
 	options.excluded_resource_types.dedup();
 	options.sitekeys.sort_unstable();
 	options.sitekeys.dedup();
+	options.remove_params.sort_unstable();
+	options.remove_params.dedup();
 	options.unsupported.sort_unstable();
 	options.unsupported.dedup();
 
@@ -395,7 +433,11 @@ fn compile_filter_list_with_badfilter_keys(
 			continue;
 		};
 
-		match compile_network_filter(network_filter, rule_id) {
+		match compile_network_filter(
+			network_filter,
+			rule_id,
+			options.allow_url_modification,
+		) {
 			Ok(rule) => {
 				if rule.condition.regex_filter.is_some() {
 					report.stats.regex_rules += 1;
@@ -423,7 +465,29 @@ fn compile_filter_list_with_badfilter_keys(
 fn compile_network_filter(
 	filter: &NetworkFilter,
 	rule_id: u32,
+	allow_url_modification: bool,
 ) -> Result<DnrRule, CompileError> {
+	let uses_remove_param = !filter.options.remove_params.is_empty();
+	if uses_remove_param && !allow_url_modification {
+		return Err((
+			CompileDiagnosticCode::MissingHostPermissions,
+			"This `$removeparam` rule needs optional host access to HTTP and HTTPS websites".into(),
+		));
+	}
+	if uses_remove_param && filter.exception {
+		return Err((
+			CompileDiagnosticCode::UnsupportedOption,
+			"A `$removeparam` exception cannot be represented by a DNR allow rule without also cancelling unrelated blocking rules".into(),
+		));
+	}
+
+	if uses_remove_param && filter.options.important {
+		return Err((
+			CompileDiagnosticCode::UnsupportedOption,
+			"The `$important` modifier cannot be preserved safely on a DNR URL-transform rule".into(),
+		));
+	}
+
 	if !filter.options.sitekeys.is_empty() {
 		return Err((
 			CompileDiagnosticCode::UnsupportedOption,
@@ -477,7 +541,13 @@ fn compile_network_filter(
 	let (initiator_domains, excluded_initiator_domains) =
 		compile_domains(&filter.options.domains)?;
 
-	let mut resource_types = if filter.options.resource_types.is_empty() {
+	let document_only_remove_param = uses_remove_param
+		&& filter.options.resource_types.is_empty()
+		&& filter.options.excluded_resource_types.is_empty();
+
+	let mut resource_types = if document_only_remove_param {
+		vec![DnrResourceType::MainFrame, DnrResourceType::SubFrame]
+	} else if filter.options.resource_types.is_empty() {
 		all_dnr_resource_types()
 	} else {
 		let mut result = Vec::new();
@@ -509,16 +579,35 @@ fn compile_network_filter(
 		PRIORITY_NORMAL_BLOCK
 	};
 
-	let action_type = if filter.exception {
-		DnrActionType::Allow
+	let mut remove_params = filter.options.remove_params.clone();
+	remove_params.sort_unstable();
+	remove_params.dedup();
+
+	let action = if uses_remove_param {
+		DnrAction {
+			action_type: DnrActionType::Redirect,
+			redirect: Some(DnrRedirect {
+				transform: DnrUrlTransform {
+					query_transform: DnrQueryTransform { remove_params },
+				},
+			}),
+		}
+	} else if filter.exception {
+		DnrAction {
+			action_type: DnrActionType::Allow,
+			redirect: None,
+		}
 	} else {
-		DnrActionType::Block
+		DnrAction {
+			action_type: DnrActionType::Block,
+			redirect: None,
+		}
 	};
 
 	Ok(DnrRule {
 		id: rule_id,
 		priority,
-		action: DnrAction { action_type },
+		action,
 		condition: DnrCondition {
 			url_filter,
 			regex_filter,
@@ -532,6 +621,11 @@ fn compile_network_filter(
 					DnrDomainType::FirstParty
 				}
 			}),
+			request_methods: uses_remove_param.then_some(vec![
+				DnrRequestMethod::Get,
+				DnrRequestMethod::Head,
+				DnrRequestMethod::Options,
+			]),
 			resource_types,
 		},
 	})
@@ -1073,6 +1167,7 @@ mod tests {
 					max_regex_rules: 0,
 				},
 				first_rule_id: 1,
+				allow_url_modification: false,
 			},
 		);
 
@@ -1116,6 +1211,7 @@ mod tests {
 					max_regex_rules: 1,
 				},
 				first_rule_id: 1,
+				allow_url_modification: false,
 			},
 		);
 
@@ -1209,6 +1305,7 @@ mod tests {
 					max_regex_rules: 0,
 				},
 				first_rule_id: 1,
+				allow_url_modification: false,
 			},
 		);
 
@@ -1229,6 +1326,7 @@ mod tests {
 			CompileOptions {
 				limits: DnrLimits::default(),
 				first_rule_id: 0,
+				allow_url_modification: false,
 			},
 		);
 
@@ -1244,6 +1342,7 @@ mod tests {
 			CompileOptions {
 				limits: DnrLimits::default(),
 				first_rule_id: u32::MAX,
+				allow_url_modification: false,
 			},
 		);
 		assert!(too_large.rules.is_empty());
@@ -1302,6 +1401,134 @@ mod tests {
 		assert_eq!(
 			report.diagnostics[0].code,
 			CompileDiagnosticCode::UnsupportedOption
+		);
+	}
+
+	#[test]
+	fn removeparam_requires_explicit_url_modification_permission() {
+		let report = compile("||example.com^$removeparam=utm_source");
+
+		assert!(report.rules.is_empty());
+		assert_eq!(report.stats.skipped_network_filters, 1);
+		assert_eq!(
+			report.diagnostics[0].code,
+			CompileDiagnosticCode::MissingHostPermissions
+		);
+	}
+
+	#[test]
+	fn compiles_basic_removeparam_to_a_document_scoped_dnr_redirect() {
+		let parsed = parse_filter_list(
+			"||example.com^$removeparam=utm_source,removeparam=click_id",
+		);
+		let report = compile_filter_list(
+			&parsed,
+			CompileOptions {
+				allow_url_modification: true,
+				..CompileOptions::default()
+			},
+		);
+		assert_eq!(report.rules.len(), 1);
+
+		let rule = &report.rules[0];
+		assert_eq!(rule.action.action_type, DnrActionType::Redirect);
+		assert_eq!(
+			rule
+				.action
+				.redirect
+				.as_ref()
+				.unwrap()
+				.transform
+				.query_transform
+				.remove_params,
+			vec!["click_id", "utm_source"]
+		);
+		assert_eq!(
+			rule.condition.request_methods,
+			Some(vec![
+				DnrRequestMethod::Get,
+				DnrRequestMethod::Head,
+				DnrRequestMethod::Options
+			])
+		);
+		assert_eq!(
+			rule.condition.resource_types,
+			vec![DnrResourceType::MainFrame, DnrResourceType::SubFrame]
+		);
+		assert!(report.diagnostics.is_empty());
+
+		let serialized = serde_json::to_value(rule).expect("DNR rule serializes");
+		assert_eq!(serialized["action"]["type"], "redirect");
+		assert_eq!(
+			serialized["action"]["redirect"]["transform"]["queryTransform"]["removeParams"]
+				[0],
+			"click_id"
+		);
+		assert_eq!(
+			serialized["action"]["redirect"]["transform"]["queryTransform"]["removeParams"]
+				[1],
+			"utm_source"
+		);
+		assert_eq!(serialized["condition"]["requestMethods"][0], "get");
+	}
+
+	#[test]
+	fn removeparam_respects_explicit_content_types() {
+		let parsed =
+			parse_filter_list("||example.com^$script,removeparam=utm_source");
+		let report = compile_filter_list(
+			&parsed,
+			CompileOptions {
+				allow_url_modification: true,
+				..CompileOptions::default()
+			},
+		);
+		assert_eq!(report.rules.len(), 1);
+		assert_eq!(
+			report.rules[0].condition.resource_types,
+			vec![DnrResourceType::Script]
+		);
+	}
+
+	#[test]
+	fn removeparam_important_rules_are_rejected_to_preserve_block_precedence() {
+		let parsed =
+			parse_filter_list("||example.com^$removeparam=utm_source,important");
+		let report = compile_filter_list(
+			&parsed,
+			CompileOptions {
+				allow_url_modification: true,
+				..CompileOptions::default()
+			},
+		);
+		assert!(report.rules.is_empty());
+		assert_eq!(report.stats.skipped_network_filters, 1);
+		assert_eq!(
+			report.diagnostics[0].code,
+			CompileDiagnosticCode::UnsupportedOption
+		);
+	}
+
+	#[test]
+	fn removeparam_exceptions_are_rejected_instead_of_broadening_allow_rules() {
+		let parsed = parse_filter_list("@@||example.com^$removeparam=utm_source");
+		let report = compile_filter_list(
+			&parsed,
+			CompileOptions {
+				allow_url_modification: true,
+				..CompileOptions::default()
+			},
+		);
+		assert!(report.rules.is_empty());
+		assert_eq!(report.stats.skipped_network_filters, 1);
+		assert_eq!(
+			report.diagnostics[0].code,
+			CompileDiagnosticCode::UnsupportedOption
+		);
+		assert!(
+			report.diagnostics[0]
+				.message
+				.contains("unrelated blocking rules")
 		);
 	}
 }

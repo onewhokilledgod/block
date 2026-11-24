@@ -454,4 +454,30 @@ describe("FilterEngineManager", () => {
 		});
 		expect(mockApi.getCurrentIds()).toHaveLength(1000);
 	});
+
+	it("passes URL-modification permission to the Rust/WASM compiler", async () => {
+		const { engine, compileFilterLists } = createEngine();
+		const mockApi = createMockRulesApi();
+		const permissions = { contains: vi.fn(async () => true) };
+		const manager = new FilterEngineManager(
+			engine,
+			new DnrRulesManager(mockApi.api, undefined, permissions)
+		);
+
+		await manager.applyFilterLists([
+			{ id: "easylist", content: "easylist content" },
+			{ id: "easyprivacy", content: "easyprivacy content" }
+		]);
+
+		expect(compileFilterLists).toHaveBeenCalledWith([
+			expect.objectContaining({
+				content: "easylist content",
+				options: expect.objectContaining({ allowUrlModification: true })
+			}),
+			expect.objectContaining({
+				content: "easyprivacy content",
+				options: expect.objectContaining({ allowUrlModification: true })
+			})
+		]);
+	});
 });

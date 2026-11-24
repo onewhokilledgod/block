@@ -42,8 +42,13 @@ export interface DeclarativeNetRequestApi {
 	getMatchedRules?(filter?: unknown): Promise<unknown[]>;
 }
 
+export interface BrowserHostPermissionsApi {
+	contains(permissions: { origins?: string[] }): Promise<boolean>;
+}
+
 interface ExtensionApiNamespace {
 	declarativeNetRequest?: DeclarativeNetRequestApi;
+	permissions?: BrowserHostPermissionsApi;
 }
 
 interface ExtensionGlobals {
@@ -72,4 +77,17 @@ export function getDnrApi(): DeclarativeNetRequestApi {
 	}
 
 	return api;
+}
+
+/** Returns the browser permissions API used to verify optional host access. */
+export function getBrowserHostPermissionsApi(): BrowserHostPermissionsApi {
+	const globals = globalThis as typeof globalThis & ExtensionGlobals;
+	const permissions =
+		globals.browser?.permissions ?? globals.chrome?.permissions;
+
+	if (!permissions) {
+		throw new Error("Browser host-permissions API is unavailable.");
+	}
+
+	return permissions;
 }

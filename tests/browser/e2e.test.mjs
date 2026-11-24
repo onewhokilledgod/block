@@ -42,7 +42,9 @@ function createPageHtml() {
       allowedExecuted: false,
       imageLoaded: false,
       fetchLoaded: false,
-      fetchError: null
+      fetchError: null,
+      removeParamLoaded: false,
+      removeParamSearch: null
     };
 
     function startRequests() {
@@ -75,6 +77,14 @@ function createPageHtml() {
         })
         .then(() => { state.fetchLoaded = true; })
         .catch(error => { state.fetchError = String(error); });
+
+      fetch("/ads/removeparam.json?e2e_remove=drop&keep=stay", { cache: "no-store" })
+        .then(response => {
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          return response.json();
+        })
+        .then(data => { state.removeParamSearch = data.search; state.removeParamLoaded = true; })
+        .catch(error => { state.removeParamSearch = String(error); state.removeParamLoaded = true; });
     }
 
     const readyObserver = new MutationObserver(startRequests);
@@ -94,6 +104,7 @@ async function startTestServer() {
 		const url = new URL(request.url ?? "/", "http://127.0.0.1");
 		requests.push({
 			pathname: url.pathname,
+			search: url.search,
 			destination: String(request.headers["sec-fetch-dest"] ?? "")
 		});
 
@@ -132,6 +143,12 @@ async function startTestServer() {
 		if (url.pathname === "/ads/ping.json") {
 			response.writeHead(200, { "Content-Type": "application/json" });
 			response.end(JSON.stringify({ ok: true }));
+			return;
+		}
+
+		if (url.pathname === "/ads/removeparam.json") {
+			response.writeHead(200, { "Content-Type": "application/json" });
+			response.end(JSON.stringify({ search: url.search }));
 			return;
 		}
 
@@ -280,7 +297,8 @@ test(
 					driver.executeScript(`
 						const state = window.__blockE2E;
 						return Boolean(state && state.started && state.blockedError &&
-							state.allowedExecuted && state.imageLoaded && state.fetchLoaded);
+							state.allowedExecuted && state.imageLoaded && state.fetchLoaded &&
+							state.removeParamLoaded);
 					`),
 				20_000,
 				"The expected blocked, allowed, image, and fetch requests did not finish."
@@ -301,6 +319,11 @@ test(
 			assert.equal(pageState.allowedExecuted, true, "The exception rule did not allow the script.");
 			assert.equal(pageState.imageLoaded, true, "The script rule blocked an image resource.");
 			assert.equal(pageState.fetchLoaded, true, "The script rule blocked an XHR/fetch resource.");
+			assert.equal(
+				pageState.removeParamSearch,
+				"?keep=stay",
+				"The DNR removeparam redirect did not remove the selected query key."
+			);
 
 			const countRequests = pathname =>
 				testServer.requests.filter(request => request.pathname === pathname).length;
@@ -308,6 +331,11 @@ test(
 			assert.equal(countRequests("/ads/allowed.js"), 1, "The allowed script did not reach the test server exactly once.");
 			assert.equal(countRequests("/ads/pixel.svg"), 1, "The image request did not reach the test server exactly once.");
 			assert.equal(countRequests("/ads/ping.json"), 1, "The fetch request did not reach the test server exactly once.");
+			const removeParamRequests = testServer.requests.filter(
+				request => request.pathname === "/ads/removeparam.json"
+			);
+			assert.equal(removeParamRequests.length, 1, "The removeparam request did not reach the server exactly once.");
+			assert.equal(removeParamRequests[0].search, "?keep=stay");
 
 			// The domain=localhost rule must block a matching request only when
 			// the initiator is localhost, not when the same request comes from

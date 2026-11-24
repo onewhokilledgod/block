@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DnrRule } from "../shared/filter-engine.js";
 import type {
+	BrowserHostPermissionsApi,
 	DeclarativeNetRequestApi,
 	DynamicRulesUpdate,
 	ExistingDynamicRule
@@ -17,6 +18,26 @@ function createRule(id: number): DnrRule {
 		condition: {
 			urlFilter: `||ads-${id}.example^`,
 			resourceTypes: ["script"]
+		}
+	};
+}
+
+function createRemoveParamRule(id: number): DnrRule {
+	return {
+		id,
+		priority: 100,
+		action: {
+			type: "redirect",
+			redirect: {
+				transform: {
+					queryTransform: { removeParams: ["utm_source"] }
+				}
+			}
+		},
+		condition: {
+			urlFilter: "||example.com^",
+			resourceTypes: ["main_frame", "sub_frame"],
+			requestMethods: ["get", "head", "options"]
 		}
 	};
 }
@@ -280,5 +301,39 @@ describe("DnrRulesManager", () => {
 		);
 		expect(mock.getDynamicRules).not.toHaveBeenCalled();
 		expect(mock.updateDynamicRules).not.toHaveBeenCalled();
+	});
+
+	it("rejects redirect rules before DNR changes when optional host access is missing", async () => {
+		const mock = createMockApi();
+		const permissions: BrowserHostPermissionsApi = {
+			contains: vi.fn(async () => false)
+		};
+		const manager = new DnrRulesManager(mock.api, undefined, permissions);
+
+		await expect(
+			manager.replaceManagedRules([createRemoveParamRule(1)])
+		).rejects.toThrow("optional host access to all HTTP and HTTPS websites");
+		expect(permissions.contains).toHaveBeenCalledWith({
+			origins: ["http://*/*", "https://*/*"]
+		});
+		expect(mock.getDynamicRules).not.toHaveBeenCalled();
+		expect(mock.updateDynamicRules).not.toHaveBeenCalled();
+	});
+
+	it("installs redirect rules when optional host access is granted", async () => {
+		const mock = createMockApi();
+		const permissions: BrowserHostPermissionsApi = {
+			contains: vi.fn(async () => true)
+		};
+		const manager = new DnrRulesManager(mock.api, undefined, permissions);
+		const rule = createRemoveParamRule(1);
+
+		const result = await manager.replaceManagedRules([rule]);
+
+		expect(result.installedCount).toBe(1);
+		expect(mock.updateDynamicRules).toHaveBeenCalledWith({
+			removeRuleIds: [],
+			addRules: [rule]
+		});
 	});
 });

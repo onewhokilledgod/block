@@ -296,6 +296,17 @@ fn parse_network_option(
 		"~third-party" => options.third_party = Some(false),
 		"match-case" => options.match_case = true,
 		"important" => options.important = true,
+		// A bare modifier removes every query parameter, which cannot be
+		// represented by DNR's finite `removeParams` list.
+		"removeparam" => options.unsupported.push(raw.to_owned()),
+		_ if lower.starts_with("removeparam=") => {
+			let parameter = &raw["removeparam=".len()..];
+			if is_basic_remove_param_name(parameter) {
+				options.remove_params.push(parameter.to_owned());
+			} else {
+				options.unsupported.push(raw.to_owned());
+			}
+		}
 		_ if lower.starts_with("sitekey=") => {
 			let value = &raw["sitekey=".len()..];
 			let sitekeys: Vec<_> = value.split('|').map(str::trim).collect();
@@ -361,6 +372,17 @@ fn parse_network_option(
 			}
 		}
 	}
+}
+
+/// DNR can remove literal query keys, but not ABP/AdGuard regex or negated
+/// parameter expressions. Keep this subset intentionally narrow and fail closed.
+fn is_basic_remove_param_name(value: &str) -> bool {
+	!value.is_empty()
+		&& value.len() <= 128
+		&& !value.starts_with('~')
+		&& value.bytes().all(|byte| {
+			byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'~')
+		})
 }
 
 fn parse_resource_type_option(option: &str) -> Option<ResourceType> {
@@ -479,6 +501,37 @@ mod tests {
 		assert!(filter.options.domains[0].include);
 		assert!(!filter.options.domains[1].include);
 		assert!(result.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn parses_repeated_basic_removeparam_modifiers() {
+		let result = parse_filter_list(
+			"||example.com^$removeparam=utm_source,REMOVEParam=click_id",
+		);
+		let Filter::Network(filter) = &result.filters[0] else {
+			panic!("expected network filter");
+		};
+
+		assert_eq!(filter.options.remove_params, vec!["utm_source", "click_id"]);
+		assert!(filter.options.unsupported.is_empty());
+		assert!(result.diagnostics.is_empty());
+	}
+
+	#[test]
+	fn preserves_advanced_removeparam_syntax_as_unsupported() {
+		for modifier in [
+			"removeparam",
+			"removeparam=/^utm_/",
+			"removeparam=~session",
+			"removeparam=",
+		] {
+			let result = parse_filter_list(&format!("||example.com^${modifier}"));
+			let Filter::Network(filter) = &result.filters[0] else {
+				panic!("expected network filter for {modifier}");
+			};
+			assert!(filter.options.remove_params.is_empty(), "{modifier}");
+			assert_eq!(filter.options.unsupported, vec![modifier], "{modifier}");
+		}
 	}
 
 	#[test]

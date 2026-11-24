@@ -38,6 +38,8 @@ pub struct NetworkOptions {
 	pub elemhide: bool,
 	pub generichide: bool,
 	pub genericblock: bool,
+	/// Literal query parameter names removed by the supported `$removeparam` subset.
+	pub remove_params: Vec<String>,
 	/// Options intentionally preserved for later compiler work.
 	pub unsupported: Vec<String>,
 }
