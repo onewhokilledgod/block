@@ -82,6 +82,9 @@ cosmeticRuntime.registerListeners();
 async function initializeBackground(): Promise<void> {
 	const services = await getBackgroundServices();
 
+	// Create the versioned defaults on a fresh install and load saved preferences.
+	await services.storage.getUserSettings();
+
 	console.info("[Block] WASM filter engine initialized successfully.");
 
 	const managedRuleIds = await services.engineManager.getManagedRuleIds();

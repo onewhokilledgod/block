@@ -1,11 +1,21 @@
 import type { FilterListId } from "./filter-lists.js";
+import {
+	createStoredUserSettingsRecord,
+	decodeStoredUserSettingsRecord,
+	DEFAULT_USER_SETTINGS,
+	mergeUserSettings,
+	USER_SETTINGS_RECORD_ID,
+	type UserSettings,
+	type UserSettingsPatch
+} from "./user-settings.js";
 
 const DATABASE_NAME = "block-filter-lists";
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 
 const STORE_NAME = "filterLists";
 const ACTIVE_STORE_NAME = "activeFilterLists";
 const PENDING_STORE_NAME = "pendingActiveSnapshot";
+const USER_SETTINGS_STORE_NAME = "userSettings";
 
 const PENDING_SNAPSHOT_KEY = "pending";
 
@@ -139,6 +149,12 @@ export class FilterListStorage {
 
 				if (!database.objectStoreNames.contains(PENDING_STORE_NAME)) {
 					database.createObjectStore(PENDING_STORE_NAME, {
+						keyPath: "id"
+					});
+				}
+
+				if (!database.objectStoreNames.contains(USER_SETTINGS_STORE_NAME)) {
+					database.createObjectStore(USER_SETTINGS_STORE_NAME, {
 						keyPath: "id"
 					});
 				}
@@ -351,6 +367,91 @@ export class FilterListStorage {
 		transaction.objectStore(PENDING_STORE_NAME).delete(PENDING_SNAPSHOT_KEY);
 
 		await done;
+	}
+
+	/** Loads the persisted preferences, creating the default record on first run. */
+	async getUserSettings(): Promise<UserSettings> {
+		const database = await this.openDatabase();
+		const transaction = database.transaction(USER_SETTINGS_STORE_NAME, "readwrite");
+		const done = transactionToPromise(transaction);
+		const store = transaction.objectStore(USER_SETTINGS_STORE_NAME);
+		const request = store.get(USER_SETTINGS_RECORD_ID);
+
+		let settings: UserSettings | undefined;
+		let operationError: unknown;
+
+		request.onsuccess = () => {
+			try {
+				const decoded = decodeStoredUserSettingsRecord(request.result);
+				settings = decoded.settings;
+
+				if (decoded.needsRewrite) {
+					store.put(createStoredUserSettingsRecord(decoded.settings));
+				}
+			} catch (error: unknown) {
+				operationError = error;
+				transaction.abort();
+			}
+		};
+
+		try {
+			await done;
+		} catch (error: unknown) {
+			throw operationError ?? error;
+		}
+
+		if (!settings) {
+			throw new Error("Could not load user settings.");
+		}
+
+		return settings;
+	}
+
+	/**
+	 * Atomically merges a partial settings update. IndexedDB serializes
+	 * read-write transactions for this store, preventing concurrent updates
+	 * from overwriting unrelated fields.
+	 */
+	async updateUserSettings(patch: UserSettingsPatch): Promise<UserSettings> {
+		// Validate the complete patch before opening a write transaction.
+		mergeUserSettings(DEFAULT_USER_SETTINGS as UserSettings, patch);
+
+		const database = await this.openDatabase();
+		const transaction = database.transaction(USER_SETTINGS_STORE_NAME, "readwrite");
+		const done = transactionToPromise(transaction);
+		const store = transaction.objectStore(USER_SETTINGS_STORE_NAME);
+		const request = store.get(USER_SETTINGS_RECORD_ID);
+
+		let settings: UserSettings | undefined;
+		let operationError: unknown;
+
+		request.onsuccess = () => {
+			try {
+				const decoded = decodeStoredUserSettingsRecord(request.result);
+				settings = mergeUserSettings(decoded.settings, patch);
+				store.put(createStoredUserSettingsRecord(settings));
+			} catch (error: unknown) {
+				operationError = error;
+				transaction.abort();
+			}
+		};
+
+		try {
+			await done;
+		} catch (error: unknown) {
+			throw operationError ?? error;
+		}
+
+		if (!settings) {
+			throw new Error("Could not update user settings.");
+		}
+
+		return settings;
+	}
+
+	/** Restores all preferences to their defaults without bypassing migrations. */
+	async resetUserSettings(): Promise<UserSettings> {
+		return this.updateUserSettings(DEFAULT_USER_SETTINGS);
 	}
 
 	close(): void {
