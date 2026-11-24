@@ -8,20 +8,29 @@ use crate::model::{
 	NetworkFilter, NetworkOptions, ParsedFilterList, ResourceType,
 };
 
-const COSMETIC_MARKERS: [(&str, bool); 2] = [("#@#", true), ("##", false)];
-const UNSUPPORTED_COSMETIC_MARKERS: [&str; 4] = ["#@?#", "#?#", "#@$#", "#$#"];
+const COSMETIC_MARKERS: [(&str, bool, bool); 4] = [
+	("#@?#", true, true),
+	("#?#", false, true),
+	("#@#", true, false),
+	("##", false, false),
+];
+const UNSUPPORTED_COSMETIC_MARKERS: [&str; 4] =
+	["#@$?#", "#$?#", "#@$#", "#$#"];
 
-/// Finds the first cosmetic separator, distinguishing supported rules from
-/// extended cosmetic and snippet syntax. Only the domain prefix is scanned:
-/// marker-like text inside a CSS selector is ordinary selector content.
-fn find_cosmetic_marker(
-	line: &str,
-) -> Option<(&'static str, Option<bool>, usize)> {
-	let supported = COSMETIC_MARKERS.iter().filter_map(|(marker, exception)| {
-		line
-			.find(*marker)
-			.map(|index| (*marker, Some(*exception), index))
-	});
+type CosmeticMarkerMatch = (&'static str, Option<(bool, bool)>, usize);
+
+/// Finds the first cosmetic marker, separating standard and extended element-
+/// hiding rules from currently unsupported CSS-style and snippet markers.
+/// A later marker-like sequence inside the selector does not replace the first.
+fn find_cosmetic_marker(line: &str) -> Option<CosmeticMarkerMatch> {
+	let supported =
+		COSMETIC_MARKERS
+			.iter()
+			.filter_map(|(marker, exception, extended)| {
+				line
+					.find(*marker)
+					.map(|index| (*marker, Some((*exception, *extended)), index))
+			});
 	let unsupported = UNSUPPORTED_COSMETIC_MARKERS.iter().filter_map(|marker| {
 		line.find(*marker).map(|index| (*marker, None, index))
 	});
@@ -44,7 +53,7 @@ pub fn parse_filter_list(input: &str) -> ParsedFilterList {
 
 		if let Some((marker, exception, marker_index)) = find_cosmetic_marker(line)
 		{
-			let Some(exception) = exception else {
+			let Some((exception, extended)) = exception else {
 				parsed.diagnostics.push(Diagnostic {
 					line: line_number,
 					level: DiagnosticLevel::Warning,
@@ -60,6 +69,7 @@ pub fn parse_filter_list(input: &str) -> ParsedFilterList {
 				line_number,
 				marker,
 				exception,
+				extended,
 				marker_index,
 				&mut parsed.diagnostics,
 			) {
@@ -103,6 +113,7 @@ fn parse_cosmetic(
 	line_number: usize,
 	marker: &str,
 	exception: bool,
+	extended: bool,
 	marker_index: usize,
 	diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<CosmeticFilter> {
@@ -140,6 +151,7 @@ fn parse_cosmetic(
 	Some(CosmeticFilter {
 		domains,
 		selector: selector.to_owned(),
+		extended,
 		exception,
 		source_line: line_number,
 	})
@@ -599,6 +611,7 @@ mod tests {
 		};
 		assert_eq!(first.selector, ".ad-slot");
 		assert!(!first.exception);
+		assert!(!first.extended);
 		assert_eq!(first.domains.len(), 2);
 
 		let Filter::Cosmetic(second) = &result.filters[1] else {
@@ -606,13 +619,44 @@ mod tests {
 		};
 		assert_eq!(second.selector, ".sponsored");
 		assert!(second.exception);
+		assert!(!second.extended);
 
 		let Filter::Cosmetic(generic) = &result.filters[2] else {
 			panic!("expected generic cosmetic filter");
 		};
 		assert!(generic.domains.is_empty());
 		assert_eq!(generic.selector, ".generic-ad");
+		assert!(!generic.extended);
 	}
+
+	#[test]
+	fn parses_extended_cosmetic_filters_and_their_exceptions() {
+		let result = parse_filter_list(
+			"example.com,~news.example#?#div:has(> .ad)\n\
+			example.com#@?#div:has(> .ad)",
+		);
+
+		assert_eq!(result.filters.len(), 2);
+		assert!(result.diagnostics.is_empty());
+
+		let Filter::Cosmetic(hiding) = &result.filters[0] else {
+			panic!("expected an extended cosmetic hiding rule");
+		};
+		assert!(hiding.extended);
+		assert!(!hiding.exception);
+		assert_eq!(hiding.selector, "div:has(> .ad)");
+		assert_eq!(hiding.domains.len(), 2);
+		assert!(hiding.domains[0].include);
+		assert!(!hiding.domains[1].include);
+
+		let Filter::Cosmetic(exception) = &result.filters[1] else {
+			panic!("expected an extended cosmetic exception");
+		};
+		assert!(exception.extended);
+		assert!(exception.exception);
+		assert_eq!(exception.selector, "div:has(> .ad)");
+	}
+
 	#[test]
 	fn regex_end_anchor_is_not_treated_as_an_option_separator() {
 		let input = r"/^https?:\/\/ads\.example\/foo$/";
@@ -809,10 +853,10 @@ mod tests {
 	#[test]
 	fn does_not_parse_extended_cosmetic_or_snippet_rules_as_network_filters() {
 		let result = parse_filter_list(
-			"example.com#?#div:has-text(ad)\n\
-			example.com#@?#div:has-text(ad)\n\
-			example.com#$#hide-if-contains ad div\n\
-			example.com#@$#hide-if-contains ad div",
+			"example.com#$#hide-if-contains ad div\n\
+			example.com#@$#hide-if-contains ad div\n\
+			example.com#$?#h3:contains(cookies)\n\
+			example.com#@$?#h3:contains(cookies)",
 		);
 
 		assert!(result.filters.is_empty());

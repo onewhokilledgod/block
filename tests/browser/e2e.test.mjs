@@ -34,6 +34,10 @@ function createPageHtml() {
 <head><meta charset="utf-8"><title>Block browser E2E</title></head>
 <body>
   <div class="e2e-ad" id="cosmetic-ad">Cosmetic test element</div>
+  <div class="e2e-extended-ad" id="cosmetic-extended-ad"><span></span></div>
+  <div class="e2e-extended-exception" id="cosmetic-extended-exception"><span></span></div>
+  <div class="e2e-extended-standard-exception" id="cosmetic-extended-standard-exception"><span></span></div>
+  <div class="e2e-standard-extended-exception" id="cosmetic-standard-extended-exception"><span></span></div>
   <script>
     window.__blockE2E = {
       started: false,
@@ -312,6 +316,19 @@ test(
 					`),
 				20_000,
 				"The production content script did not hide the cosmetic test element."
+			);
+
+			await driver.wait(
+				async () =>
+					driver.executeScript(`
+						const display = id => getComputedStyle(document.getElementById(id)).display;
+						return display("cosmetic-extended-ad") === "none" &&
+							display("cosmetic-extended-exception") !== "none" &&
+							display("cosmetic-extended-standard-exception") === "none" &&
+							display("cosmetic-standard-extended-exception") === "none";
+					`),
+				20_000,
+				"Extended cosmetic selectors or type-specific exceptions behaved incorrectly."
 			);
 
 			const pageState = await driver.executeScript("return window.__blockE2E;");

@@ -9,6 +9,7 @@ interface CompiledDomainRestriction {
 interface CompiledCosmeticFilter {
 	selector: string;
 	exception: boolean;
+	extended: boolean;
 	domains: CompiledDomainRestriction[];
 }
 
@@ -195,6 +196,7 @@ export class CosmeticRuleEngine {
 				{
 					selector,
 					exception: filter.exception,
+					extended: filter.extended,
 					domains: domains as CompiledDomainRestriction[]
 				}
 			];
@@ -214,7 +216,7 @@ export class CosmeticRuleEngine {
 			return [];
 		}
 
-		const selectors = new Set<string>();
+		const selectors = new Map<string, string>();
 		const exceptions = new Set<string>();
 
 		for (const filter of this.filters) {
@@ -227,13 +229,22 @@ export class CosmeticRuleEngine {
 				continue;
 			}
 
+			const ruleKey =
+				`${filter.extended ? "extended" : "standard"}\u0000${filter.selector}`;
 			if (filter.exception) {
-				exceptions.add(filter.selector);
+				exceptions.add(ruleKey);
 			} else {
-				selectors.add(filter.selector);
+				selectors.set(ruleKey, filter.selector);
 			}
 		}
 
-		return [...selectors].filter(selector => !exceptions.has(selector));
+		const activeSelectors = new Set<string>();
+		for (const [ruleKey, selector] of selectors) {
+			if (!exceptions.has(ruleKey)) {
+				activeSelectors.add(selector);
+			}
+		}
+
+		return [...activeSelectors];
 	}
 }

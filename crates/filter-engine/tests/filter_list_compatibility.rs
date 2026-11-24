@@ -21,10 +21,8 @@ fn count_filter_kinds(parsed: &ParsedFilterList) -> (usize, usize) {
 fn easylist_fixture_parses_and_compiles_the_supported_subset() {
 	let parsed = parse_filter_list(include_str!("fixtures/easylist.txt"));
 
-	assert_eq!(count_filter_kinds(&parsed), (5, 1));
-	assert_eq!(parsed.diagnostics.len(), 1);
-	assert_eq!(parsed.diagnostics[0].level, DiagnosticLevel::Warning);
-	assert!(parsed.diagnostics[0].source.contains("#?#"));
+	assert_eq!(count_filter_kinds(&parsed), (5, 2));
+	assert!(parsed.diagnostics.is_empty());
 
 	let report = compile_filter_list(&parsed, CompileOptions::default());
 
@@ -32,7 +30,7 @@ fn easylist_fixture_parses_and_compiles_the_supported_subset() {
 	assert_eq!(report.stats.network_filters_seen, 5);
 	assert_eq!(report.stats.compiled_rules, 5);
 	assert_eq!(report.stats.skipped_network_filters, 0);
-	assert_eq!(report.stats.cosmetic_filters_deferred, 1);
+	assert_eq!(report.stats.cosmetic_filters_deferred, 2);
 	assert!(report.diagnostics.is_empty());
 
 	let url_filters: Vec<_> = report
@@ -143,15 +141,15 @@ fn abp_syntax_fixture_covers_common_options_and_preserves_unsupported_syntax() {
 	let parsed =
 		parse_filter_list(include_str!("fixtures/abp-syntax-compatibility.txt"));
 
-	assert_eq!(count_filter_kinds(&parsed), (15, 4));
-	assert_eq!(parsed.diagnostics.len(), 4);
+	assert_eq!(count_filter_kinds(&parsed), (15, 6));
+	assert_eq!(parsed.diagnostics.len(), 2);
 	assert_eq!(
 		parsed
 			.diagnostics
 			.iter()
 			.map(|diagnostic| diagnostic.line)
 			.collect::<Vec<_>>(),
-		vec![24, 25, 26, 27]
+		vec![26, 27]
 	);
 	assert!(
 		parsed
@@ -318,7 +316,7 @@ fn abp_syntax_fixture_covers_common_options_and_preserves_unsupported_syntax() {
 	assert_eq!(report.stats.network_filters_seen, 15);
 	assert_eq!(report.stats.compiled_rules, 11);
 	assert_eq!(report.stats.skipped_network_filters, 4);
-	assert_eq!(report.stats.cosmetic_filters_deferred, 4);
+	assert_eq!(report.stats.cosmetic_filters_deferred, 6);
 	assert_eq!(report.rules.len(), 11);
 	assert_eq!(report.diagnostics.len(), 3);
 	assert!(report.diagnostics.iter().all(

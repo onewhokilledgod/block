@@ -12,7 +12,14 @@ const FILTER_LIST = [
 	"@@||127.0.0.1*/ads/allowed.js$script",
 	"||127.0.0.1*/scoped/domain.js$script,domain=localhost",
 	"||127.0.0.1*/ads/removeparam.json$xmlhttprequest,removeparam=e2e_remove",
-	"##.e2e-ad"
+	"##.e2e-ad",
+	"#?#.e2e-extended-ad:has(> span)",
+	"#?#.e2e-extended-exception:has(> span)",
+	"#@?#.e2e-extended-exception:has(> span)",
+	"#?#.e2e-extended-standard-exception:has(> span)",
+	"#@#.e2e-extended-standard-exception:has(> span)",
+	"##.e2e-standard-extended-exception:has(> span)",
+	"#@?#.e2e-standard-extended-exception:has(> span)"
 ].join("\n");
 
 const browserApi = getBrowserContentApi();

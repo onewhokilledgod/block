@@ -11,13 +11,15 @@ function domain(domain: string, include = true): DomainRestriction {
 function cosmeticFilter(
 	selector: string,
 	domains: DomainRestriction[] = [],
-	exception = false
+	exception = false,
+	extended = false
 ): CosmeticFilter {
 	return {
 		kind: "cosmetic",
 		domains,
 		selector,
 		exception,
+		extended,
 		sourceLine: 1
 	};
 }
@@ -49,12 +51,12 @@ describe("CosmeticRuleEngine", () => {
 		expect(engine.getSelectorsForHostname("example.org")).toEqual([]);
 	});
 
-	it("applies exclusions to a domain and all of its subdomains", () => {
+	it("applies domain exclusions to extended rules and their subdomains", () => {
 		const engine = new CosmeticRuleEngine([
 			cosmeticFilter(".ad", [
 				domain("example.com"),
 				domain("news.example.com", false)
-			])
+			], false, true)
 		]);
 
 		expect(engine.getSelectorsForHostname("shop.example.com")).toEqual([
@@ -183,5 +185,28 @@ describe("CosmeticRuleEngine", () => {
 		expect(engine.getSelectorsForHostname("example.com")).toEqual([
 			".valid"
 		]);
+	});
+
+	it("does not let standard and extended exceptions cancel each other", () => {
+		const engine = new CosmeticRuleEngine([
+			cosmeticFilter(".extended", [], false, true),
+			cosmeticFilter(".extended", [], true, false),
+			cosmeticFilter(".standard", [], false, false),
+			cosmeticFilter(".standard", [], true, true)
+		]);
+
+		expect(engine.getSelectorsForHostname("example.com")).toEqual([
+			".extended",
+			".standard"
+		]);
+	});
+
+	it("allows an extended exception to cancel its matching extended rule", () => {
+		const engine = new CosmeticRuleEngine([
+			cosmeticFilter(".extended", [], false, true),
+			cosmeticFilter(".extended", [], true, true)
+		]);
+
+		expect(engine.getSelectorsForHostname("example.com")).toEqual([]);
 	});
 });

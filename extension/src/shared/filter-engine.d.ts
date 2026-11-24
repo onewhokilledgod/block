@@ -48,6 +48,7 @@ export interface CosmeticFilter {
 	kind: "cosmetic";
 	domains: DomainRestriction[];
 	selector: string;
+	extended: boolean;
 	exception: boolean;
 	sourceLine: number;
 }

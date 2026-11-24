@@ -71,6 +71,8 @@ pub struct CosmeticFilter {
 	/// Empty means a generic cosmetic rule applying to all sites.
 	pub domains: Vec<DomainRestriction>,
 	pub selector: String,
+	/// `true` for `#?#` / `#@?#` extended cosmetic rules.
+	pub extended: bool,
 	/// `true` for `#@#` cosmetic exceptions.
 	pub exception: bool,
 	pub source_line: usize,

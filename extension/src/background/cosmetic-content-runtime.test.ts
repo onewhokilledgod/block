@@ -27,6 +27,7 @@ function cosmeticFilter(
 		kind: "cosmetic",
 		domains,
 		selector,
+		extended: false,
 		exception: false,
 		sourceLine: 1
 	};

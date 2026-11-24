@@ -141,6 +141,7 @@ enum ParsedFilterDto {
 	Cosmetic {
 		domains: Vec<DomainRestrictionDto>,
 		selector: String,
+		extended: bool,
 		exception: bool,
 		source_line: usize,
 	},
@@ -408,6 +409,7 @@ fn to_filter_dto(filter: &Filter) -> ParsedFilterDto {
 		Filter::Cosmetic(filter) => ParsedFilterDto::Cosmetic {
 			domains: filter.domains.iter().map(to_domain_dto).collect(),
 			selector: filter.selector.clone(),
+			extended: filter.extended,
 			exception: filter.exception,
 			source_line: filter.source_line,
 		},
@@ -491,11 +493,29 @@ mod tests {
 		);
 		assert_eq!(value["filters"][0]["options"]["badfilter"], true);
 		assert_eq!(value["filters"][1]["kind"], "cosmetic");
+		assert_eq!(value["filters"][1]["extended"], false);
 		assert_eq!(value["diagnostics"][0]["level"], "error");
 		assert_eq!(value["stats"]["totalFilters"], 2);
 		assert_eq!(value["stats"]["networkFilters"], 1);
 		assert_eq!(value["stats"]["cosmeticFilters"], 1);
 		assert_eq!(value["stats"]["errors"], 1);
+	}
+
+	#[test]
+	fn parse_report_preserves_extended_cosmetic_rule_kind() {
+		let report = build_parse_report(
+			"example.com#?#div:has(> .ad)\nexample.com#@?#div:has(> .ad)",
+		);
+		let value = serde_json::to_value(report).expect("parse report serializes");
+
+		assert_eq!(value["filters"].as_array().expect("filters array").len(), 2);
+		assert_eq!(value["filters"][0]["kind"], "cosmetic");
+		assert_eq!(value["filters"][0]["extended"], true);
+		assert_eq!(value["filters"][0]["exception"], false);
+		assert_eq!(value["filters"][1]["extended"], true);
+		assert_eq!(value["filters"][1]["exception"], true);
+		assert_eq!(value["stats"]["cosmeticFilters"], 2);
+		assert_eq!(value["stats"]["errors"], 0);
 	}
 
 	#[test]
