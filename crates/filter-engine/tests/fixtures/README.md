@@ -35,3 +35,11 @@ produce a broader rule.
 
 When refreshing these excerpts, update the pinned upstream versions and keep
 only representative lines that exercise intentional parser/compiler behavior.
+
+The separate `abp-syntax-compatibility.txt` fixture is a curated syntax matrix
+based on the ABP filter documentation. Its example domains and rules are
+synthetic; it is not copied from a live subscription. It exercises resource
+types, behavior options, option-only filters, sitekey and page-scope exceptions,
+cosmetic filters with CSS declaration blocks, and unsupported extended
+cosmetic/snippet markers. Marker-like text inside a CSS attribute selector is
+included to guard against treating selector contents as rule separators.

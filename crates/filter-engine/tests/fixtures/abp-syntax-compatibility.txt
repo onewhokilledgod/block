@@ -1,0 +1,27 @@
+[Adblock Plus 2.0]
+! Curated ABP syntax compatibility matrix. Examples are test-only.
+
+||types.example^$script,image,stylesheet,object,xmlhttprequest,subdocument,font,media,ping,websocket,other
+||legacy-object.example^$object-subrequest
+||assets.example^$~image,~script
+||tracker.example^$third-party
+||first-party.example^$~third-party
+*/BannerAd.gif$match-case
+||cdn.example/path^$domain=example.com|~news.example.com
+||signed.example^$sitekey=ABCD1234|EFGH5678
+@@||trusted.example^$document,elemhide,generichide,genericblock
+||important.example^$important
+||cancelled.example^$script,badfilter
+/ads[0-9]+\.example/$script
+foo\$bar
+$third-party,xmlhttprequest,domain=example.com
+||unsupported.example^$popup,webrtc,webbundle,csp=script-src 'none',redirect=trusted-resource,removeparam=utm_source
+
+example.com,~news.example.com##.ad-slot
+example.com#@#.sponsor
+##.global-ad {display:none!important;}
+##[data-rule="#?#"][data-script="#$#"]
+example.com#?#div:has-text(Sponsored)
+example.com#@?#div:has-text(Sponsored)
+example.com#$#hide-if-contains "Sponsored" div
+example.com#@$#hide-if-contains "Sponsored" div

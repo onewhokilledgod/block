@@ -11,6 +11,26 @@ use crate::model::{
 const COSMETIC_MARKERS: [(&str, bool); 2] = [("#@#", true), ("##", false)];
 const UNSUPPORTED_COSMETIC_MARKERS: [&str; 4] = ["#@?#", "#?#", "#@$#", "#$#"];
 
+/// Finds the first cosmetic separator, distinguishing supported rules from
+/// extended cosmetic and snippet syntax. Only the domain prefix is scanned:
+/// marker-like text inside a CSS selector is ordinary selector content.
+fn find_cosmetic_marker(
+	line: &str,
+) -> Option<(&'static str, Option<bool>, usize)> {
+	let supported = COSMETIC_MARKERS.iter().filter_map(|(marker, exception)| {
+		line
+			.find(*marker)
+			.map(|index| (*marker, Some(*exception), index))
+	});
+	let unsupported = UNSUPPORTED_COSMETIC_MARKERS.iter().filter_map(|marker| {
+		line.find(*marker).map(|index| (*marker, None, index))
+	});
+
+	supported
+		.chain(unsupported)
+		.min_by_key(|(_, _, index)| *index)
+}
+
 pub fn parse_filter_list(input: &str) -> ParsedFilterList {
 	let mut parsed = ParsedFilterList::default();
 
@@ -22,34 +42,30 @@ pub fn parse_filter_list(input: &str) -> ParsedFilterList {
 			continue;
 		}
 
-		if contains_unsupported_cosmetic_syntax(line) {
-			parsed.diagnostics.push(Diagnostic {
-				line: line_number,
-				level: DiagnosticLevel::Warning,
-				message: "Extended cosmetic or snippet syntax is not parsed yet".into(),
-				source: line.into(),
-			});
-			continue;
-		}
+		if let Some((marker, exception, marker_index)) = find_cosmetic_marker(line)
+		{
+			let Some(exception) = exception else {
+				parsed.diagnostics.push(Diagnostic {
+					line: line_number,
+					level: DiagnosticLevel::Warning,
+					message: "Extended cosmetic or snippet syntax is not parsed yet"
+						.into(),
+					source: line.into(),
+				});
+				continue;
+			};
 
-		if contains_cosmetic_marker(line) {
-			if let Some(filter) =
-				parse_cosmetic(line, line_number, &mut parsed.diagnostics)
-			{
+			if let Some(filter) = parse_cosmetic(
+				line,
+				line_number,
+				marker,
+				exception,
+				marker_index,
+				&mut parsed.diagnostics,
+			) {
 				parsed.filters.push(Filter::Cosmetic(filter));
 			}
-			// Do not reinterpret a malformed cosmetic rule as a network rule.
-			continue;
-		}
-
-		if line.contains("#?#") || line.contains("#$#") {
-			parsed.diagnostics.push(Diagnostic {
-				line: line_number,
-				level: DiagnosticLevel::Warning,
-				message: "Procedural or extended cosmetic syntax is not parsed yet"
-					.into(),
-				source: line.into(),
-			});
+			// Do not reinterpret a malformed or unsupported cosmetic rule as a network rule.
 			continue;
 		}
 
@@ -61,12 +77,6 @@ pub fn parse_filter_list(input: &str) -> ParsedFilterList {
 	}
 
 	parsed
-}
-
-fn contains_unsupported_cosmetic_syntax(line: &str) -> bool {
-	UNSUPPORTED_COSMETIC_MARKERS
-		.iter()
-		.any(|marker| line.contains(marker))
 }
 
 fn is_ignored_line(line: &str) -> bool {
@@ -88,24 +98,14 @@ fn is_abp_header(line: &str) -> bool {
 		})
 }
 
-fn contains_cosmetic_marker(line: &str) -> bool {
-	COSMETIC_MARKERS
-		.iter()
-		.any(|(marker, _)| line.contains(marker))
-}
-
 fn parse_cosmetic(
 	line: &str,
 	line_number: usize,
+	marker: &str,
+	exception: bool,
+	marker_index: usize,
 	diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<CosmeticFilter> {
-	let (marker, exception, marker_index) = COSMETIC_MARKERS
-		.iter()
-		.filter_map(|(marker, exception)| {
-			line.find(*marker).map(|index| (*marker, *exception, index))
-		})
-		.min_by_key(|(_, _, index)| *index)?;
-
 	let domain_part = &line[..marker_index];
 	let selector = line[marker_index + marker.len()..].trim();
 
