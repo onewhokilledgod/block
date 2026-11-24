@@ -1,4 +1,4 @@
-export type FilterListId = "easylist" | "easyprivacy";
+export type FilterListId = string;
 
 export interface FilterListDefinition {
 	id: FilterListId;

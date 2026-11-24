@@ -293,7 +293,7 @@ describe("User settings persistence", () => {
 		});
 
 		const database = await requestToPromise(indexedDB.open(databaseName));
-		expect(database.version).toBe(4);
+		expect(database.version).toBe(5);
 		expect(database.objectStoreNames.contains("userSettings")).toBe(true);
 		expect(database.objectStoreNames.contains("filterLists")).toBe(true);
 		expect(database.objectStoreNames.contains("activeFilterLists")).toBe(true);

@@ -1,4 +1,12 @@
 import type { FilterListId } from "./filter-lists.js";
+import { FILTER_LISTS } from "./filter-lists.js";
+import {
+	createBuiltInFilterListSubscriptions,
+	normalizeCustomFilterListName,
+	normalizeCustomFilterListUrl,
+	type AddCustomFilterListInput,
+	type StoredFilterListSubscription
+} from "./filter-list-subscriptions.js";
 import {
 	createStoredUserSettingsRecord,
 	decodeStoredUserSettingsRecord,
@@ -10,12 +18,13 @@ import {
 } from "./user-settings.js";
 
 const DATABASE_NAME = "block-filter-lists";
-const DATABASE_VERSION = 4;
+const DATABASE_VERSION = 5;
 
 const STORE_NAME = "filterLists";
 const ACTIVE_STORE_NAME = "activeFilterLists";
 const PENDING_STORE_NAME = "pendingActiveSnapshot";
 const USER_SETTINGS_STORE_NAME = "userSettings";
+const SUBSCRIPTIONS_STORE_NAME = "filterListSubscriptions";
 
 const PENDING_SNAPSHOT_KEY = "pending";
 
@@ -31,6 +40,9 @@ export interface StoredFilterList {
 	content: string;
 	fetchedAt: number;
 	checkedAt: number;
+	name?: string;
+	ruleWeight?: number;
+	maxBytes?: number;
 }
 
 export interface PendingActiveSnapshot {
@@ -158,6 +170,12 @@ export class FilterListStorage {
 						keyPath: "id"
 					});
 				}
+
+				if (!database.objectStoreNames.contains(SUBSCRIPTIONS_STORE_NAME)) {
+					database.createObjectStore(SUBSCRIPTIONS_STORE_NAME, {
+						keyPath: "id"
+					});
+				}
 			};
 
 			request.onsuccess = () => {
@@ -250,6 +268,197 @@ export class FilterListStorage {
 		transaction.objectStore(STORE_NAME).delete(id);
 
 		await done;
+	}
+
+	/**
+	 * Ensures that built-in subscriptions exist without overwriting their
+	 * enabled state. This also upgrades databases created before the registry
+	 * was introduced.
+	 */
+	private async ensureBuiltInSubscriptions(): Promise<void> {
+		const database = await this.openDatabase();
+		const transaction = database.transaction(
+			SUBSCRIPTIONS_STORE_NAME,
+			"readwrite"
+		);
+		const done = transactionToPromise(transaction);
+		const store = transaction.objectStore(SUBSCRIPTIONS_STORE_NAME);
+		const request = store.getAll();
+
+		request.onsuccess = () => {
+			const existingIds = new Set(
+				(request.result as StoredFilterListSubscription[]).map(item => item.id)
+			);
+
+			for (const subscription of createBuiltInFilterListSubscriptions()) {
+				if (!existingIds.has(subscription.id)) {
+					store.add(subscription);
+				}
+			}
+		};
+
+		await done;
+	}
+
+	/** Returns built-in and user-added subscriptions, seeding built-ins once. */
+	async getAllSubscriptions(): Promise<StoredFilterListSubscription[]> {
+		await this.ensureBuiltInSubscriptions();
+
+		const database = await this.openDatabase();
+		const transaction = database.transaction(
+			SUBSCRIPTIONS_STORE_NAME,
+			"readonly"
+		);
+		const done = transactionToPromise(transaction);
+		const result = await requestToPromise(
+			transaction.objectStore(SUBSCRIPTIONS_STORE_NAME).getAll()
+		);
+		await done;
+
+		return (result as StoredFilterListSubscription[]).sort((first, second) => {
+			if (first.builtIn !== second.builtIn) {
+				return first.builtIn ? -1 : 1;
+			}
+			return first.name.localeCompare(second.name);
+		});
+	}
+
+	/** Adds an HTTPS-only custom list and rejects duplicate normalized URLs. */
+	async addCustomSubscription(
+		input: AddCustomFilterListInput
+	): Promise<StoredFilterListSubscription> {
+		const url = normalizeCustomFilterListUrl(input.url);
+		const name = normalizeCustomFilterListName(input.name, url);
+		await this.getAllSubscriptions();
+
+		const database = await this.openDatabase();
+		const transaction = database.transaction(
+			SUBSCRIPTIONS_STORE_NAME,
+			"readwrite"
+		);
+		const done = transactionToPromise(transaction);
+		const store = transaction.objectStore(SUBSCRIPTIONS_STORE_NAME);
+		const request = store.getAll();
+		const id = `custom-${crypto.randomUUID()}`;
+		const subscription: StoredFilterListSubscription = {
+			id,
+			name,
+			url,
+			enabled: true,
+			builtIn: false,
+			ruleWeight: 1,
+			maxBytes: 8 * 1024 * 1024,
+			addedAt: Date.now()
+		};
+		let operationError: unknown;
+
+		request.onsuccess = () => {
+			const subscriptions = request.result as StoredFilterListSubscription[];
+			if (subscriptions.some(item => item.url === url)) {
+				operationError = new Error(
+					"A filter list with this URL is already subscribed."
+				);
+				transaction.abort();
+				return;
+			}
+
+			store.add(subscription);
+		};
+
+		try {
+			await done;
+		} catch (error: unknown) {
+			throw operationError ?? error;
+		}
+
+		return subscription;
+	}
+
+	/** Enables or disables a subscription without deleting its cached copy. */
+	async setSubscriptionEnabled(
+		id: FilterListId,
+		enabled: boolean
+	): Promise<StoredFilterListSubscription> {
+		if (typeof enabled !== "boolean") {
+			throw new TypeError("Subscription enabled state must be a boolean.");
+		}
+
+		await this.getAllSubscriptions();
+		const database = await this.openDatabase();
+		const transaction = database.transaction(
+			SUBSCRIPTIONS_STORE_NAME,
+			"readwrite"
+		);
+		const done = transactionToPromise(transaction);
+		const store = transaction.objectStore(SUBSCRIPTIONS_STORE_NAME);
+		const request = store.get(id);
+		let updated: StoredFilterListSubscription | undefined;
+		let operationError: unknown;
+
+		request.onsuccess = () => {
+			const current = request.result as StoredFilterListSubscription | undefined;
+			if (!current) {
+				operationError = new Error(`Unknown filter list subscription '${id}'.`);
+				transaction.abort();
+				return;
+			}
+
+			updated = { ...current, enabled };
+			store.put(updated);
+		};
+
+		try {
+			await done;
+		} catch (error: unknown) {
+			throw operationError ?? error;
+		}
+
+		if (!updated) {
+			throw new Error("Could not update filter list subscription.");
+		}
+
+		return updated;
+	}
+
+	/**
+	 * Removes only custom subscriptions and their downloaded cache. Built-in
+	 * lists remain available and can only be disabled.
+	 */
+	async deleteCustomSubscription(id: FilterListId): Promise<void> {
+		await this.getAllSubscriptions();
+		const database = await this.openDatabase();
+		const transaction = database.transaction(
+			[SUBSCRIPTIONS_STORE_NAME, STORE_NAME],
+			"readwrite"
+		);
+		const done = transactionToPromise(transaction);
+		const subscriptions = transaction.objectStore(SUBSCRIPTIONS_STORE_NAME);
+		const request = subscriptions.get(id);
+		let operationError: unknown;
+
+		request.onsuccess = () => {
+			const current = request.result as StoredFilterListSubscription | undefined;
+			if (!current) {
+				operationError = new Error(`Unknown filter list subscription '${id}'.`);
+				transaction.abort();
+				return;
+			}
+
+			if (current.builtIn || FILTER_LISTS.some(item => item.id === id)) {
+				operationError = new Error("Built-in filter lists cannot be removed.");
+				transaction.abort();
+				return;
+			}
+
+			subscriptions.delete(id);
+			transaction.objectStore(STORE_NAME).delete(id);
+		};
+
+		try {
+			await done;
+		} catch (error: unknown) {
+			throw operationError ?? error;
+		}
 	}
 
 	/**
