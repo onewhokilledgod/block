@@ -13,5 +13,9 @@
 		"types": ["vite/client"]
 	},
 
-	"include": ["src/**/*.ts", "src/**/*.d.ts"]
+	"include": [
+		"src/**/*.ts",
+		"src/**/*.d.ts",
+		"../tests/browser/background.ts"
+	]
 }

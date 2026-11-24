@@ -11,13 +11,15 @@
 		"check:extension": "tsc --project extension/tsconfig.json --noEmit",
 		"build:extension": "npm run check:extension && vite build --config extension/vite.config.mts && vite build --config extension/vite.content.config.mts",
 		"build": "npm run build:wasm && npm run build:extension",
-		"test:extension": "vitest run"
+		"test:extension": "vitest run extension",
+		"test:browser": "node --test tests/browser/e2e.test.mjs"
 	},
 	"devDependencies": {
 		"@types/node": "^26.6.6",
 		"fake-indexeddb": "^6.2.8",
 		"typescript": "^7.0.2",
 		"vite": "^8.3.8",
-		"vitest": "^4.1.12"
+		"vitest": "^4.1.12",
+		"selenium-webdriver": "4.54.0"
 	}
 }
