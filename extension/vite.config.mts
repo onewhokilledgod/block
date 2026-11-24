@@ -25,8 +25,8 @@ export default defineConfig({
 		rolldownOptions: {
 			input: {
 				background: resolve(extensionRoot, "src/background/index.ts"),
-
-				popup: resolve(extensionRoot, "popup.html")
+				popup: resolve(extensionRoot, "popup.html"),
+				options: resolve(extensionRoot, "options.html")
 			},
 
 			output: {

@@ -1,5 +1,10 @@
 import { initializeFilterEngine } from "../shared/filter-engine.js";
 import type { FilterEngine } from "../shared/filter-engine.js";
+import {
+	getBrowserRuntimeApi,
+	type BrowserMessageSender
+} from "../shared/browser-content-api.js";
+import { REFRESH_FILTER_LISTS_MESSAGE } from "../shared/options-messages.js";
 
 import { DnrRulesManager } from "./rules-manager.js";
 import { FilterEngineManager } from "./engine-manager.js";
@@ -75,6 +80,47 @@ const syncRuntime = new FilterListSyncRuntime(async options => {
 // IMPORTANT:
 // Register listeners before any asynchronous initialization.
 syncRuntime.registerListeners();
+
+function isExtensionPageSender(sender: BrowserMessageSender): boolean {
+	if (!sender.url) {
+		return false;
+	}
+
+	try {
+		const protocol = new URL(sender.url).protocol;
+		return protocol === "chrome-extension:" || protocol === "moz-extension:";
+	} catch {
+		return false;
+	}
+}
+
+function getErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+// Manual refresh requests are accepted only from extension pages, not from
+// content scripts running on arbitrary websites.
+getBrowserRuntimeApi().onMessage.addListener((message, sender, sendResponse) => {
+	if (
+		!message ||
+		typeof message !== "object" ||
+		(message as Record<string, unknown>).type !== REFRESH_FILTER_LISTS_MESSAGE
+	) {
+		return false;
+	}
+
+	if (!isExtensionPageSender(sender)) {
+		sendResponse({ ok: false, error: "This action is only available to extension pages." });
+		return false;
+	}
+
+	void syncRuntime.runSync("options page manual refresh", { forceApply: true }).then(
+		result => sendResponse({ ok: true, result }),
+		error => sendResponse({ ok: false, error: getErrorMessage(error) })
+	);
+
+	return true;
+});
 
 const cosmeticRuntime = new CosmeticContentRuntime(getBackgroundServices);
 cosmeticRuntime.registerListeners();

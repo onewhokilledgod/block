@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="color-scheme" content="light dark" />
+		<title>Block — Settings</title>
+	</head>
+	<body>
+		<main class="page-shell">
+			<header class="page-header">
+				<div>
+					<p class="eyebrow">BLOCK EXTENSION</p>
+					<h1>Settings</h1>
+					<p class="page-intro">Control protection, filter subscriptions, updates and appearance.</p>
+				</div>
+				<span class="version-label">Preferences are saved automatically</span>
+			</header>
+
+			<p id="page-status" class="status" role="status" aria-live="polite">Loading settings…</p>
+
+			<section class="settings-section" aria-labelledby="protection-heading">
+				<div class="section-heading">
+					<div>
+					<p class="eyebrow">PROTECTION</p>
+					<h2 id="protection-heading">Filtering</h2>
+				</div>
+				<p class="section-description">Choose which types of filtering you want enabled.</p>
+			</div>
+				<div class="settings-card">
+					<label class="setting-row" for="network-filtering">
+						<span class="setting-copy">
+							<strong>Network filtering</strong>
+							<span>Block requests that match enabled filter rules.</span>
+						</span>
+						<input id="network-filtering" class="switch" type="checkbox" />
+					</label>
+					<div class="row-divider"></div>
+					<label class="setting-row" for="cosmetic-filtering">
+						<span class="setting-copy">
+							<strong>Cosmetic filtering</strong>
+							<span>Hide page elements selected by cosmetic filters.</span>
+						</span>
+						<input id="cosmetic-filtering" class="switch" type="checkbox" />
+					</label>
+				</div>
+			</section>
+
+			<section class="settings-section" aria-labelledby="subscriptions-heading">
+				<div class="section-heading">
+					<div>
+					<p class="eyebrow">FILTERS</p>
+					<h2 id="subscriptions-heading">Filter lists</h2>
+				</div>
+				<p class="section-description">Manage built-in and custom filter-list subscriptions.</p>
+			</div>
+				<div id="subscription-list" class="subscription-list" aria-live="polite">
+					<p class="muted">Loading subscriptions…</p>
+				</div>
+				<form id="add-subscription-form" class="add-subscription settings-card">
+					<div class="form-heading">
+						<h3>Add a custom filter list</h3>
+						<p>Only HTTPS subscription URLs are accepted.</p>
+					</div>
+					<label class="field-label" for="subscription-name">Name <span>(optional)</span></label>
+					<input id="subscription-name" name="name" type="text" maxlength="80" placeholder="My filter list" autocomplete="off" />
+					<label class="field-label" for="subscription-url">Filter list URL</label>
+					<div class="url-entry">
+						<input id="subscription-url" name="url" type="url" required placeholder="https://example.com/filters.txt" autocomplete="url" />
+						<button class="primary-button" type="submit">Add list</button>
+					</div>
+				</form>
+			</section>
+
+			<section class="settings-section" aria-labelledby="updates-heading">
+				<div class="section-heading">
+					<div>
+					<p class="eyebrow">MAINTENANCE</p>
+					<h2 id="updates-heading">Updates</h2>
+					</div>
+					<p class="section-description">Set your preferred update frequency or start an update manually.</p>
+				</div>
+				<div class="settings-card">
+					<label class="setting-row" for="automatic-updates">
+						<span class="setting-copy">
+							<strong>Automatic filter-list updates</strong>
+							<span>Allow the extension to check subscribed lists periodically.</span>
+						</span>
+						<input id="automatic-updates" class="switch" type="checkbox" />
+					</label>
+					<div class="row-divider"></div>
+					<div class="setting-row interval-row">
+						<label class="setting-copy" for="update-interval">
+							<strong>Update interval</strong>
+							<span>Choose how often automatic checks should run.</span>
+						</label>
+						<select id="update-interval" class="select-control">
+							<option value="30">Every 30 minutes</option>
+							<option value="60">Every hour</option>
+							<option value="360">Every 6 hours</option>
+							<option value="720">Every 12 hours</option>
+							<option value="1440">Every 24 hours</option>
+							<option value="2880">Every 2 days</option>
+							<option value="10080">Every 7 days</option>
+						</select>
+					</div>
+					<div class="row-divider"></div>
+					<div class="setting-row manual-row">
+						<span class="setting-copy">
+							<strong>Update now</strong>
+							<span>Check the currently supported built-in lists immediately.</span>
+						</span>
+						<button id="refresh-lists" class="secondary-button" type="button">Check for updates</button>
+					</div>
+				</div>
+			</section>
+
+			<section class="settings-section" aria-labelledby="appearance-heading">
+				<div class="section-heading">
+					<div>
+					<p class="eyebrow">PERSONALIZATION</p>
+					<h2 id="appearance-heading">Appearance</h2>
+				</div>
+				<p class="section-description">Choose the colour theme for extension pages.</p>
+			</div>
+				<div class="settings-card setting-row">
+					<label class="setting-copy" for="theme">
+						<strong>Theme</strong>
+						<span>Use your system preference or select a theme.</span>
+					</label>
+					<select id="theme" class="select-control">
+						<option value="system">System</option>
+						<option value="light">Light</option>
+						<option value="dark">Dark</option>
+					</select>
+				</div>
+			</section>
+
+			<footer class="page-footer">
+				<p>Changes are stored locally in this browser.</p>
+				<button id="reset-settings" class="text-button" type="button">Restore default preferences</button>
+			</footer>
+		</main>
+		<script type="module" src="/src/options/index.ts"></script>
+	</body>
+</html>
